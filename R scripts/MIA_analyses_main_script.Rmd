@@ -1,0 +1,4066 @@
+---
+title: "Metagenomics Analysis of MIA data"
+author: "Svetlina Vasileva with help from CY - `r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    code_folding: "hide"
+    toc: TRUE
+    number_sections: TRUE
+    includes:
+      after_body: footer.html
+
+---
+
+# Set up 
+
+## Loading Packages
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+setwd("C:/Users/uqsvasil/Documents/PhD/MIA")
+
+source("R/0.loading-packages.R")
+
+```
+
+## Directories
+
+- diet_dir with Microba IDs (BBC1234 format) and dietary PCs - in the email titled "AAB meeting 10/12 follow-up"
+
+```{r}
+
+# Metagenomic data
+taxa_dir <- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/processed_data/taxonomic_profiles/profiles_relativeabundance_AAB.tsv" # relative abundance
+taxa_count_dir <- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/processed_data/taxonomic_profiles/profiles_counts_AAB.tsv"
+family_count_rm0_dir<-"C:/Users/uqsvasil/Documents/PhD/MIA/Data/processed_data/taxonomy_levels/taxa_count_AAB_family_rm0.txt"
+genus_count_rm0_dir<-"C:/Users/uqsvasil/Documents/PhD/MIA/Data/processed_data/taxonomy_levels/taxa_count_AAB_genus_rm0.txt"
+order_count_rm0_dir<-"C:/Users/uqsvasil/Documents/PhD/MIA/Data/processed_data/taxonomy_levels/taxa_count_AAB_order_rm0.txt"
+phylum_count_rm0_dir<-"C:/Users/uqsvasil/Documents/PhD/MIA/Data/processed_data/taxonomy_levels/taxa_count_AAB_phylum_rm0.txt"
+func_dir <- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/processed_data/functional_profiles/by_sample/MICROBA.samples_AAB.tsv"
+mcpath_dir <- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/processed_data/functional_profiles/by_sample/MetaCyc_pathways.samples_AAB.tsv" # MetaCyc pathways
+mcpath_group_dir <- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/processed_data/functional_profiles/by_sample/MetaCyc_group.samples_AAB.tsv" # MetaCyc pathways
+tree_bacteria_dir <- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/mgdb_r89_bac.decorated.sp_labels.pruned.tree"
+
+# Clinical data
+diet_dir <- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/AES/acrc_aes_PC13_pe_clr_demographics_199.csv" # dietary PCs
+sample_qc_dir <- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/processed_data/sample_qc.tsv" # 
+mia_mats_dir <- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/mia_mats_metagenomics.csv"  #Mats and MIA info
+breast_dir<- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/mia_breastfeeding_extracted.csv"
+meds_dir<- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/meds/medications_metagenomics_methylation_indication.csv" # medications including antibiotics and antipsychotics
+cam_dir<- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/meds/cam_metagenomics_methylation_indication.csv" # complimentary and alternative medicine including probiotics
+
+```
+
+## Set up themes and colours
+
+```{r}
+
+theme_set(theme_minimal()) # set up minimal theme for all plots 
+color_mia<-c("#D8457D","#7C133B")
+color_mats<-c("#BAA6DD", "#513286")
+color_mia_number<-c("grey","#D8457D","#7C133B")
+color_mats_number<-c("grey","#BAA6DD", "#513286")
+color_asd<-c("#44AA99","#29665C")
+color_me <- c("#F5BB00", "#D76A03")
+
+```
+
+## Read in data
+
+```{r}
+
+taxa <- fread(taxa_dir, stringsAsFactors = FALSE)
+taxa_count <- fread(taxa_count_dir, stringsAsFactors = FALSE)
+phylum_count <- fread(phylum_count_rm0_dir, stringsAsFactors = FALSE)
+order_count <- fread(order_count_rm0_dir, stringsAsFactors = FALSE)
+family_count <- fread(family_count_rm0_dir, stringsAsFactors = FALSE)
+genus_count <- fread(genus_count_rm0_dir, stringsAsFactors = FALSE)
+diet <- read.csv(diet_dir, header = T, as.is = T)
+mia_mats <- read.csv(mia_mats_dir, header = T, as.is = T)
+breast <- read.csv(breast_dir, header = T, as.is = T)
+meds <- read.csv(meds_dir, header = T, as.is = T)
+cam <- read.csv(cam_dir, header = T, as.is = T)
+sample_qc <- read.delim(sample_qc_dir, header = T, as.is = T)
+
+func <- fread(func_dir, stringsAsFactors = FALSE)
+mcpath <- fread(mcpath_dir, stringsAsFactors = FALSE)
+mcpath_group <- fread(mcpath_group_dir, stringsAsFactors = FALSE)
+
+```
+
+# Phenotypic data cleaning
+
+## Tree map for participant distribution
+
+```{r}
+diet.tmp <- inner_join(diet,mia_mats, by = "IID", copy=FALSE, suffix=c("diet","mia_mats"))
+
+# Make a "blank" column, named
+diet.tmp$mia_indication <- NA # MIA
+diet.tmp$mats_indication <- NA # Maternal stress
+diet.tmp$me_indication <- NA # maternal event (MIA or MatS)
+
+# Now fill in the new columns
+diet.tmp$mia_indication <- ifelse(diet.tmp$mia_number > 0, "MIA", "noMIA")
+diet.tmp$mats_indication <- ifelse(diet.tmp$mats_number > 0, "MatS", "noMatS")
+diet.tmp$mia_indication[is.na(diet.tmp$mats_number)] <- "NA"
+
+
+# Dataframe
+diet.tmp <- diet.tmp %>%
+  mutate(
+    group = case_when(
+      mia_indication == "noMIA" & mats_indication == "noMatS" ~ "no MIA/MatS",
+      mia_indication == "MIA" & mats_indication == "noMatS" ~ "MIA only",
+      mia_indication == "noMIA" & mats_indication == "MatS" ~ "MatS only",
+      mia_indication == "MIA" & mats_indication == "MatS" ~ "MIA and MatS",
+      is.na(mats_indication) ~ "Excluded"
+    )
+  )
+
+diet.tmp$group <- factor(diet.tmp$group, levels = c("Excluded","no MIA/MatS", "MIA only", "MatS only", "MIA and MatS"))
+
+# Aggregate data
+aggregated_data <- diet.tmp %>%
+  group_by(ASD, group) %>%
+  dplyr::summarize(n = n())
+
+# Create treemap
+treemap(aggregated_data, 
+        index = c("ASD", "group"),
+        vSize = "n",
+        title = "Distribution of Participants",
+        palette = "Dark2",
+        border.lwds=c(7,2))
+
+
+```
+
+## Phenotype/Dietary data
+
+- ASD, diet, age, some CAM, some med, etc all in diet file
+- there are some exclusions here as one participant (4494902 in the UNR group) actually has a diagnosis of a genetic syndrome, so has been excluded
+- cleaning the BSC data in this step to normalise it
+
+```{r}
+
+# Sort the pheno/covariates file
+diet <- diet[order(diet$MG_SampleID),]
+
+# Remove excluded individuals
+diet <- diet %>% 
+  filter(!IID %in% c(4494902)) %>% # Smith Magenis syndrome
+  rename(sex=proforma_sex) 
+
+# Clean BSC data - regroup
+diet <- diet %>%
+  mutate(bristol_stool_chart_regroup = case_when(
+    bristol_stool_chart %in% 1:2 ~ 2,
+    bristol_stool_chart == 3 ~ 3,
+    bristol_stool_chart == 4 ~ 4,
+    bristol_stool_chart %in% 5:7 ~ 5
+  )) %>%
+  mutate(bristol_stool_chart_regroup = as.factor(bristol_stool_chart_regroup))
+
+# Get a diet file without missing data
+diet_full <- diet %>% filter(!is.na(PC1_diet_pe))
+
+```
+
+
+## MIA/Maternal Stress data
+- mia_mats file was compiled after visually inspecting the full data
+- For participants with NA for MatS, record NA for MIA -> because those mothers have a lot of missing data, so it is impossible to know whether they had no MIA history for sure or whether it was just not recorded.
+
+```{r}
+
+# Combining diet/phenotype data with MIA/MatS data
+diet_mia_mats <- diet_full %>%
+  inner_join(mia_mats, by = "IID", suffix = c("diet_full", "mia_mats")) %>%
+  mutate(  # Create new variables and fill in values
+    me_number = mia_number + mats_number,
+    mia_indication = if_else(mia_number > 0, "MIA", "noMIA"),
+    mats_indication = if_else(mats_number > 0, "MatS", "noMatS"),
+    me_indication = if_else(me_number > 0, "ME", "noME")
+  ) 
+
+# For participants with NA for MatS, record NA for MIA
+# This is done because those mothers have a lot of missing data, so it is impossible to know whether they had no MIA history for sure or whether it was just not recorded. 
+diet_mia_mats[is.na(diet_mia_mats$mats_indication), "mia_indication"] <- NA
+
+# Remove irrelevant individuals (with NAs for MIA/Mats)
+diet_mia_mats<-diet_mia_mats %>% filter(!is.na(mia_indication))
+diet_mia_mats<-diet_mia_mats %>% filter(!is.na(mats_indication))
+
+# Make them into factorial variables
+diet_mia_mats <- diet_mia_mats %>%
+  mutate(mia_indication = factor(mia_indication, levels = c("noMIA", "MIA")),
+         mats_indication = factor(mats_indication, levels = c("noMatS", "MatS")),
+         me_indication = factor(me_indication, levels = c("noME", "ME")))
+
+```
+
+
+```{r out.width=c('50%', '50%'), fig.show='hold', fig.cap="Chi squared of MIA/MatS and ASD"}
+# Plots of counts of MIA & MatS
+chisq.test(diet_mia_mats$mats_indication,diet_mia_mats$mia_indication, correct = FALSE)
+
+# Chi squared test for MIA
+table(diet_mia_mats$ASD,diet_mia_mats$mia_indication)
+chisq.test(diet_mia_mats$ASD,diet_mia_mats$mia_indication, correct = FALSE)
+p_chi<-chisq.test(diet_mia_mats$ASD,diet_mia_mats$mia_indication, correct = FALSE)$p.value
+
+# Turn ASD and sex into factors
+diet_mia_mats$ASD<-factor(diet_mia_mats$ASD)
+diet_mia_mats$sex<-factor(diet_mia_mats$sex)
+
+# Stacked bar graph for MIA
+chi_mia<-ggplot(diet_mia_mats, aes(x=ASD, fill=mia_indication)) +
+  geom_bar(width=0.80, position="fill") +   # percentage 
+  labs(x = "Diagnosis",y="Count", fill = "Maternal Immune Activation") +
+  theme(text = element_text(size = 10))  +
+  theme(legend.title = element_text(size = 10)) +
+  theme(legend.text = element_text(size = 8)) +
+  theme(legend.position = "top") +
+    scale_y_continuous(labels = scales::percent) + 
+    scale_fill_manual(values=color_mia) +
+    annotate("text", x = 1.5,y=1.05, label=paste0("p-value: ", signif(p_chi,2)))
+
+# Chi squared test for MatS
+table(diet_mia_mats$ASD,diet_mia_mats$mats_indication)
+chisq.test(diet_mia_mats$ASD,diet_mia_mats$mats_indication, correct = FALSE)
+p_chi<-chisq.test(diet_mia_mats$ASD,diet_mia_mats$mats_indication, correct = FALSE)$p.value
+
+# Stacked bar graph MatS
+chi_mats<-ggplot(diet_mia_mats, aes(x=ASD, fill=mats_indication)) +
+  geom_bar(width=0.80, position="fill") + 
+  labs(x = "Diagnosis", y="Count", fill = "Maternal Stress")  +
+  theme(text = element_text(size = 10))  +
+  theme(legend.title = element_text(size = 10)) +
+  theme(legend.text = element_text(size = 8)) +
+  theme(legend.position = "top") + 
+    scale_y_continuous(labels = scales::percent) + 
+    scale_fill_manual(values=color_mats) +
+    annotate("text", x = 1.5,y=1.05, label=paste0("p-value: ", signif(p_chi,2)))
+      #  annotate("text", x = -Inf, y = Inf, label = "B)", hjust = -17, vjust = 2) 
+
+chi_mia+chi_mats
+ggsave("mia_mats_asd.png", height = 5, width = 8, dpi=600)
+
+```
+
+```{r}
+
+# Check that mia and mats are not associated
+chisq.test(diet_mia_mats$mats_indication,diet_mia_mats$mia_indication, correct = FALSE)
+
+
+#Logistic regression: 1
+model_mia_ASD <- glm(ASD ~ mia_indication, data=diet_mia_mats, family=binomial())
+summary(model_mia_ASD)
+
+
+#Logistic regression: 2
+model_mia_ASD <- glm(ASD ~ mia_indication + mats_indication, data=diet_mia_mats, family=binomial())
+summary(model_mia_ASD)
+
+#Logistic regression: 3
+model_mia_ASD <- glm(ASD ~ mia_indication + mats_indication + sex, data=diet_mia_mats, family=binomial())
+summary(model_mia_ASD)
+
+
+#Logistic regression: 4
+model_mia_ASD <- glm(ASD ~ mia_indication + mats_indication + sex + age, data=diet_mia_mats, family=binomial())
+summary(model_mia_ASD)
+
+# Extracting model summary
+model_summary <- summary(model_mia_ASD)
+
+# Extracting coefficients
+coefs <- model_summary$coefficients
+
+# Extracting Odds Ratios
+OR <- exp(coefs[, "Estimate"])
+
+# Extracting 95% CI for Odds Ratios
+CI_low <- exp(coefs[, "Estimate"] - 1.96 * coefs[, "Std. Error"])
+CI_high <- exp(coefs[, "Estimate"] + 1.96 * coefs[, "Std. Error"])
+
+print_result <- function(predictor_name) {
+    cat("Results of the Logistic Regression Analysis for Predictor:", predictor_name, "\n\n")
+    cat("Coefficient (log odds):", round(coefs[predictor_name, "Estimate"], 3), "\n")
+    cat("Standard Error:", round(coefs[predictor_name, "Std. Error"], 3), "\n")
+    cat("Z-value:", round(coefs[predictor_name, "z value"], 3), "\n")
+    cat("P-value:", round(coefs[predictor_name, "Pr(>|z|)"], 3), "\n")
+    cat("Odds Ratio:", round(OR[predictor_name], 3), "\n")
+    cat("95% Confidence Interval for Odds Ratio:", 
+        round(CI_low[predictor_name], 3), "to", round(CI_high[predictor_name], 3), "\n\n")
+}
+
+# Print the results for each predictor
+print_result("mia_indicationMIA")
+print_result("mats_indicationMatS")
+print_result("sexM")
+print_result("age")
+
+
+# Additional details
+cat("Model Details:\n")
+cat("-2 Log-Likelihood:", round(model_summary$null.deviance - model_summary$deviance, 3), "\n")
+cat("AIC:", round(model_summary$aic, 3), "\n")
+
+```
+
+### MIA number
+
+```{r}
+# Plots 
+ggplot(diet_mia_mats, aes(x=mia_number, fill=ASD)) +geom_bar()+ scale_fill_manual(values=color_asd)
+ggplot(diet_mia_mats, aes(x=mia_complication, fill=ASD)) +geom_bar()+ scale_fill_manual(values=color_asd)
+ggplot(diet_mia_mats, aes(x=mia_acute_inflammation, fill=ASD)) +geom_bar()+ scale_fill_manual(values=color_asd)
+ggplot(diet_mia_mats, aes(x=mia_asthma_allergy, fill=ASD)) +geom_bar() + scale_fill_manual(values=color_asd)
+ggplot(diet_mia_mats, aes(x=mia_autoimmune, fill=ASD)) +geom_bar() + scale_fill_manual(values=color_asd)
+
+table(diet_mia_mats$mia_number, diet_mia_mats$ASD)
+chisq.test(diet_mia_mats$ASD,diet_mia_mats$mia_acute_inflammation, correct = FALSE)
+
+```
+### MatS number 
+
+```{r}
+
+ggplot(diet_mia_mats, aes(x=mats_number, fill=ASD)) + geom_bar() + scale_fill_manual(values=color_asd)
+
+```
+### MIA and MatS intensity
+- creating new categoical variables for MIA/MatS indicating levels of exposure as none, low, and high 
+- we didn't end up using this
+```{r}
+
+diet_mia_mats<-diet_mia_mats %>%
+  mutate(mats_new = case_when(
+    mats_number == 0 ~ "none",
+    mats_number %in% c(1, 2) ~ "low",
+    mats_number > 2 ~ "high"),
+    mia_new = case_when(
+    mia_number == 0 ~ "none",
+    mia_number %in% c(1) ~ "low",
+    mia_number > 1 ~ "high")) %>%
+  mutate(mats_new = factor(mats_new, levels = c("none", "low", "high")),
+         mia_new = factor(mia_new, levels = c("none", "low", "high")))
+
+```
+
+## Meds and CAM
+- here I am including the data for APs, GI symptoms and probiotics 
+- APs: risperidone and olanzapine
+- CAM: complementary and alternative medicine
+- 0 = "not reported", 1 - yes
+- antibiotic_current: Is the medicaiton currently being taken 0 (Not reported/Error), 1 (Yes), 2 (No), 3 (Only when needed)
+- 30/92 ASD children took probiotics vs 11/72 nonASD children
+
+```{r}
+
+diet_mia_mats <- diet_mia_mats %>% 
+  left_join(meds[,c("IID","meds_antipsychotic", "meds_gastrointestinal")], by="IID") %>%
+  replace_na(list(meds_antipsychotic = 0, meds_gastrointestinal = 0, cam_probiotic = 0)) %>% # replace NAs with 0s
+  mutate_at(vars(mia_number, mats_number, me_number, meds_antibiotic, meds_antipsychotic, meds_gastrointestinal, cam_probiotic), as.factor) # make the values factors 
+
+table(diet_mia_mats$ASD, diet_mia_mats$cam_probiotic)
+
+```
+
+## Breastfeeding
+- after cleaning: No (7), Yes (74), and NA (118) -> can't do much with it
+
+```{r}
+
+breast_clean <- breast %>%
+  rowwise() %>%
+  mutate(site = as.factor(site),
+         breastfeed = ifelse(breastfeed %in% c("To do", ""), NA, breastfeed),
+         breastfeed_problems = ifelse(breastfeed_problems %in% c("To do","To Do", ""), NA, breastfeed_problems),
+         breastfeed = factor(breastfeed, levels = c("no", "yes")),
+         breastfeed_duration = case_when(
+           is.na(c_across(breastfeed)) ~ as.numeric(NA),
+           c_across(breastfeed) == "no" ~ 0,
+           TRUE ~ as.numeric(c_across(breastfeed_duration))
+         ))
+
+table(breast_clean$breastfeed)
+
+```
+
+## Paternal age
+- https://stats.oarc.ucla.edu/r/dae/logit-regression/ 
+- a lot of NAs for paternal age for children without ASD (11 SIB and 9 UNR) compared to ASD (3) --> cannot use as a variable?
+- stick with sex, mia and mats?
+
+```{r}
+# upload file with parental ages
+parent_age_dir <- "C:/Users/uqsvasil/Documents/PhD/MIA/Data/mia_parental_dob_with_fid.csv"  #Parental age dates
+parent_age <- read.csv(parent_age_dir, header = T, as.is = T)
+
+# Read all date columns in date format
+parent_age$child_dob<-dmy(parent_age$child_dob)
+parent_age$mother_dob<-dmy(parent_age$mother_dob)
+parent_age$father_dob<-dmy(parent_age$father_dob)
+
+# Calculate age from dates
+parent_age$mother_age<-trunc((parent_age$mother_dob%--%parent_age$child_dob)/years(1))
+parent_age$father_age<-trunc((parent_age$father_dob%--%parent_age$child_dob)/years(1))
+
+#Selecting only ages and IID
+parent_age<-parent_age%>%
+  dplyr::select(IID, mother_age, father_age) 
+
+parent_age %>%
+  right_join(diet_mia_mats[,c("IID","ASD", "participant_type")]) %>%
+  group_by(ASD) %>%
+  summarise(na_count = sum(is.na(father_age)))
+
+```
+
+## Logistic regression on ASD (age, sex, MIA, MatS)
+- to check whether any of the variables successful predict an ASD diagnosis
+- mia_indication, sex and age were all significant predictors of ASD. 
+
+
+```{r}
+
+# Selecting relevant columns 
+log_reg<-diet_mia_mats%>%
+  dplyr::select(IID, ASD, age, sex, mia_indication, mats_indication, MG_FID)
+
+# Check variables
+str(log_reg)
+summary(log_reg)
+
+# Run log regression
+glm_mia<-glm(ASD ~ mia_indication, data=log_reg, family="binomial")
+glm_mats<-glm(ASD ~ mats_indication, data=log_reg, family="binomial")
+glm_combined<-glm(ASD ~ mia_indication + mats_indication + sex + age, data=log_reg, family="binomial")
+summary(glm_combined)
+exp(coefficients(glm_combined)) 
+exp(cbind(OR = coef(glm_combined), confint(glm_combined))) # odds ratio and CIs using profiled log-likelihood
+
+# Export log reg table
+library(stargazer)
+stargazer(glm_combined, type = "text") # text output
+# stargazer(glm_mia, glm_mats, glm_combined,
+#           dep.var.caption = "DV: ASD",
+#           covariate.labels = c("MIA (yes)", "MatS (yes)", "Sex (male)", "Age (years)"),
+#           #nodes.label = "Significance levels",
+#           type="html",
+#           out="C:/Users/uqsvasil/Documents/PhD/MIA/Output/table_outputs/glm_asd.html")
+
+```
+
+## Get all pheno types in one file
+- dietary file from Chloe, mia, mats, parental age
+
+```{r}
+diet_mia_mats_age <- diet_mia_mats %>%
+  plyr::join(parent_age, by = "IID", type = "left") %>%
+  join(breast_clean[,c("IID","breastfeed", "breastfeed_duration","site")], by="IID")
+write.csv(diet_mia_mats_age, "C:/Users/uqsvasil/Documents/PhD/MIA/Data/diet_mia_mats_age_full.csv", row.names=FALSE)
+
+```
+
+# Stratifications
+
+## MIA types
+- Acute inflammation (23), asthma/allergy (20), complication (24), autoimmune (10) - counts for each 
+- Acute inflammation (13), asthma/allergy (12), complication (17), autoimmune (5), multiple events (16) - counts after subgrouping
+- MIA multiple types (11 pregnancies), 1 type - 52 pregnancies
+
+```{r}
+
+# Check MIAs in the different groups
+diet_mia_mats %>% 
+  dplyr::select(IID, ASD, mia_indication, mia_number, mia_acute_inflammation, mia_asthma_allergy, mia_complication, mia_autoimmune) %>%
+  dplyr::filter(mia_indication=="MIA") %>%
+  dplyr::summarise(across(c("mia_acute_inflammation", "mia_asthma_allergy", "mia_complication", "mia_autoimmune"), ~sum(.!=0), .names = 'non_zero_{.col}'))
+
+# Check which pregnancies have multiple MIA events (still could be the same type of MIA)
+diet_mia_mats<-diet_mia_mats %>% 
+  dplyr::mutate(mia_subgroup = case_when(
+    mia_number == 0 ~ "no_mia",
+    mia_number > 1 ~ "mia_multiple",
+    mia_number == 1 ~ ifelse(mia_acute_inflammation == 1, "mia_acute_inflammation",
+                             ifelse(mia_asthma_allergy == 1, "mia_asthma_allergy",
+                                    ifelse(mia_complication == 1, "mia_complication",
+                                           "mia_autoimmune"))))) %>%
+mutate(mia_subgroup = factor(mia_subgroup, levels = c("no_mia", "mia_acute_inflammation", "mia_asthma_allergy","mia_complication", "mia_autoimmune", "mia_multiple")))
+table(diet_mia_mats$mia_subgroup)
+
+
+# Add a column with the count of non-zero values across specified columns for each row
+diet_mia_mats.tmp <- diet_mia_mats %>%
+  dplyr::select(IID, ASD, mia_indication, mia_number, mia_acute_inflammation, mia_asthma_allergy, mia_complication, mia_autoimmune) %>%
+  rowwise() %>%
+  mutate(mia_type = sum(c_across(c(mia_acute_inflammation, mia_asthma_allergy, mia_complication, mia_autoimmune)) != 0)) %>%
+  ungroup()
+
+table(diet_mia_mats.tmp$ASD, diet_mia_mats.tmp$mia_acute_inflammation)
+table(diet_mia_mats.tmp$ASD, diet_mia_mats.tmp$mia_asthma_allergy)
+table(diet_mia_mats.tmp$ASD, diet_mia_mats.tmp$mia_complication)
+table(diet_mia_mats.tmp$ASD, diet_mia_mats.tmp$mia_autoimmune)
+
+```
+
+## True negative control
+
+```{r}
+
+diet_mia_mats <- diet_mia_mats %>%
+  mutate(
+    group = case_when(
+      mia_indication == "noMIA" & mats_indication == "noMatS" ~ "none",
+      mia_indication == "MIA" & mats_indication == "noMatS" ~ "MIA_only",
+      mia_indication == "noMIA" & mats_indication == "MatS" ~ "MatS_only",
+      mia_indication == "MIA" & mats_indication == "MatS" ~ "MIA_MatS"
+      )
+  )
+
+diet_mia_mats$group <- factor(diet_mia_mats$group, levels = c("none", "MIA_only", "MatS_only", "MIA_MatS"))
+
+# Tree map for participant distribution (N=174)
+library(treemap)
+# Aggregate data
+aggregated_data <- diet_mia_mats %>%
+  group_by(ASD, group) %>%
+  dplyr::summarize(n = n())
+
+# Create treemap
+treemap(aggregated_data, 
+        index = c("ASD", "group"),
+        vSize = "n",
+        title = "Distribution of Participants",
+        palette = "Dark2",
+        border.lwds=c(7,2))
+
+table(diet.tmp$ASD,diet.tmp$group)
+
+# True negative MIA/MatS IDs
+MIA_true_IDs <- diet_mia_mats %>% filter(group == "MIA_only" | group == "none") %>% pull(MG_SampleID) # 90
+MatS_true_IDs <- diet_mia_mats %>% filter(group == "MatS_only" | group == "none") %>% pull(MG_SampleID) # 111
+
+
+# True MIA
+diet_mia_mats_true_mia <- diet_mia_mats %>% filter(MG_SampleID %in% MIA_true_IDs)
+table(diet_mia_mats_true_mia$mia_indication, diet_mia_mats_true_mia$ASD)
+chisq.test(diet_mia_mats_true_mia$ASD,diet_mia_mats_true_mia$mia_indication, correct = FALSE)
+
+# True MatS
+diet_mia_mats_true_mats <- diet_mia_mats %>% filter(MG_SampleID %in% MatS_true_IDs)
+table(diet_mia_mats_true_mats$mats_indication, diet_mia_mats_true_mats$ASD)
+chisq.test(diet_mia_mats_true_mats$ASD,diet_mia_mats_true_mats$mats_indication, correct = FALSE)
+
+```
+## Acute inflammation
+
+```{r}
+# Take only participants with acute inflammation and true negative control
+acute_negative_IDs <- diet_mia_mats %>%
+  filter(mia_acute_inflammation >= 1 | group == "none") %>%
+  pull(MG_SampleID)
+
+# True MIA
+diet_mia_mats_acute <- diet_mia_mats %>% filter(MG_SampleID %in% acute_negative_IDs)
+table(diet_mia_mats_acute$mia_indication, diet_mia_mats_acute$ASD)
+chisq.test(diet_mia_mats_acute$ASD,diet_mia_mats_acute$mia_indication, correct = FALSE)
+
+```
+
+## Age 
+- Create 3 age groups (2-5, 6-10, 11-17)
+
+```{r}
+
+# Age
+histogram(diet_mia_mats$age) 
+
+# Age groups: 2-5, 6-10, 11-7 
+diet_mia_mats<-diet_mia_mats %>%
+  mutate(
+    age_group = case_when(
+      age < 6  ~ "early",
+      age >= 6 & age < 11  ~ "middle",
+      age >= 11  ~ "late")
+    ,
+    age_group = factor(age_group, levels = c("early", "middle", "late"))
+  )
+
+table(diet_mia_mats$age_group, diet_mia_mats$mia_indication)
+table(diet_mia_mats$age_group, diet_mia_mats$mats_indication)
+
+early_IDs <- diet_mia_mats %>% filter(age_group == "early") %>% pull(MG_SampleID) # 64
+middle_IDs <- diet_mia_mats %>% filter(age_group == "middle") %>% pull(MG_SampleID) # 68
+late_IDs <- diet_mia_mats %>% filter(age_group == "late") %>% pull(MG_SampleID) # 42
+
+```
+
+## Subsets for OSCA
+
+```{r}
+table(diet_mia_mats$meds_antibiotic)
+table(diet_mia_mats$meds_antibiotic_current)
+table(diet_mia_mats$meds_gastrointestinal)
+table(diet_mia_mats$participant_type)
+table(diet_mia_mats$cam_probiotic, diet_mia_mats$mia_indication)
+table(diet_mia_mats$meds_antipsychotic)
+
+# For OSCA
+# List of kids not on ABs
+no_current_ab_only_list <- diet_mia_mats %>%
+  filter(meds_antibiotic_current != "1") %>%
+  select(FID = IID, IID = IID)
+write.table(no_current_ab_only_list, 
+	"C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/OSCA_prep/osca_metagenomics_subset_no_current_ab.list",
+	col.names = F, row.names = F, sep = "\t", quote = F)
+
+# List of kids not on GIs
+no_gastro_meds_only_list <- diet_mia_mats %>%
+  filter(meds_gastrointestinal != "1") %>%
+  select(FID = IID, IID = IID)
+write.table(no_gastro_meds_only_list, 
+	"C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/OSCA_prep/osca_metagenomics_subset_no_gastro_meds.list",
+	col.names = F, row.names = F, sep = "\t", quote = F)
+
+# List of early age kids
+early_age_group_list <- diet_mia_mats %>%
+  filter(age_group == "early") %>%
+  select(FID = IID, IID = IID)
+write.table(early_age_group_list, 
+	"C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/OSCA_prep/osca_metagenomics_subset_early_age_group.list",
+	col.names = F, row.names = F, sep = "\t", quote = F)
+
+# List of middle age kids
+middle_age_group_list <- diet_mia_mats %>%
+  filter(age_group == "middle") %>%
+  select(FID = IID, IID = IID)
+write.table(middle_age_group_list, 
+	"C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/OSCA_prep/osca_metagenomics_subset_middle_age_group.list",
+	col.names = F, row.names = F, sep = "\t", quote = F)
+
+# List of late age kids
+late_age_group_list <- diet_mia_mats %>%
+  filter(age_group == "late") %>%
+  select(FID = IID, IID = IID)
+write.table(late_age_group_list, 
+	"C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/OSCA_prep/osca_metagenomics_subset_late_age_group.list",
+	col.names = F, row.names = F, sep = "\t", quote = F)
+
+# List of MIA_only and none
+mia_2_list <- diet_mia_mats %>%
+  filter(group == "none" | group == "MIA_only") %>%
+  select(FID = IID, IID = IID)
+write.table(mia_2_list, 
+	"C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/OSCA_prep/osca_metagenomics_subset_mats_excluded.list",
+	col.names = F, row.names = F, sep = "\t", quote = F)
+
+# List of MatS_only and none
+mats_2_list <- diet_mia_mats %>%
+  filter(group == "none" | group == "MatS_only") %>%
+  select(FID = IID, IID = IID)
+write.table(mats_2_list, 
+	"C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/OSCA_prep/osca_metagenomics_subset_mia_excluded.list",
+	col.names = F, row.names = F, sep = "\t", quote = F)
+
+# List of MIA acute and and none only (N=83)
+acute_negative_list <- diet_mia_mats %>%
+  filter(mia_acute_inflammation >= 1 | group == "none") %>%
+  select(FID = IID, IID = IID)
+write.table(acute_negative_list, 
+	"C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/OSCA_prep/osca_metagenomics_subset_acute_negative.list",
+	col.names = F, row.names = F, sep = "\t", quote = F)
+
+```
+
+```{r}
+#
+qcov <- diet_mia_mats[,c("IID", "IID", "age", "PC1_diet_pe", "PC2_diet_pe", "PC3_diet_pe", "bristol_stool_chart_regroup")]
+colnames(qcov)[1:2] <- c("FID", "IID")  # change IID to FID
+
+# Continuous covariates:
+write.table(qcov %>% dplyr::select(-c("bristol_stool_chart_regroup", "age")), 
+	"C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/OSCA_prep/osca_metagenomics_dietPC.qcov",
+	col.names = F, row.names = F, sep = "\t", quote = F)
+write.table(qcov %>% dplyr::select(-c("age")), 
+	"C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/OSCA_prep/osca_metagenomics_dietPC_bristol.qcov",
+	col.names = F, row.names = F, sep = "\t", quote = F)
+
+
+```
+
+
+# Descriptive statistics
+
+```{r}
+# Select relevant columns
+descriptive_mia<-diet_mia_mats %>% 
+  dplyr::select(IID, participant_type, ASD,age, sex, bmi, mia_indication, mats_indication, mia_number, mats_number,me_indication, bristol_stool_chart, PC1_diet_pe, PC2_diet_pe, PC3_diet_pe, meds_antibiotic, meds_antibiotic_current, meds_antipsychotic, meds_gastrointestinal, cam_probiotic, sleep_cshq_total, wisc_fsiq_composite, participant_type, age_group) %>%
+  mutate(meds_antibiotic_current = case_when(
+    meds_antibiotic_current == 0 ~ "not_reported_error",
+    meds_antibiotic_current == 1 ~ "yes",
+    meds_antibiotic_current == 2 ~ "no",
+    meds_antibiotic_current == 3 ~ "when_needed",
+    TRUE ~ as.character(meds_antibiotic_current)
+  )) 
+
+descriptive_mia$bristol_stool_chart<-as.factor(descriptive_mia$bristol_stool_chart)
+
+descriptive_mia$participant_type<-as.factor(descriptive_mia$participant_type)
+
+# Relabel
+my_labels<-list(
+  participant_type="Participant Group",
+  ASD = "ASD",
+  age= "Age",
+  sex="Sex",
+  bmi="Body Mass Index",
+  mia_indication="MIA",
+  mia_number = "MIA number",
+  mats_indication="Maternal Stress",
+  mats_number ="MatS number",
+  me_indication = "Maternal Adverse Event",
+  bristol_stoo_chart = "Stool type",
+  PC1_diet_pe="Diet PC1", 
+  PC2_diet_pe="Diet PC2",
+  PC3_diet_pe="Diet PC3",
+  sleep_cshq_total = "Sleep",
+  wisc_fsiq_composite = "WISC",
+  meds_antibiotic = "Antibiotics",
+  meds_antibiotic_current = "Antibiotics current",
+  meds_antipsychotic = "Antipsychotics", 
+  meds_gastrointesitnal = "GI meds", 
+  cam_probiotic = "Probiotcs",
+  age_group = "Age group")
+
+# Create a table with descriptive statistics with "arsenal" package 
+descriptive_table_type<-tableby(participant_type ~age + sex + bmi + mia_indication + mats_indication + mia_number + mats_number + bristol_stool_chart + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe + sleep_cshq_total + wisc_fsiq_composite + meds_antibiotic + meds_antibiotic_current + meds_antipsychotic + meds_gastrointestinal + cam_probiotic + age_group, data=descriptive_mia, digits = 2, pfootnote = TRUE)
+summary_type<-summary(descriptive_table_type, labelTranslations = my_labels, title ="Participant Group Decriptive Statistics", digits=1, pfootnote = FALSE)
+summary_type
+#write2word(summary_type, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_biome_demographics_type.docx") # have to copy paste within console to get the table 
+
+# Create a table with descriptive statistics with "arsenal" package 
+descriptive_table_asd<-tableby(ASD ~age + sex + bmi + mia_indication + mats_indication + mia_number + mats_number + bristol_stool_chart + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe + sleep_cshq_total + wisc_fsiq_composite + meds_antibiotic + meds_antibiotic_current + meds_antipsychotic + meds_gastrointestinal + cam_probiotic + age_group, data=descriptive_mia, digits = 2, pfootnote = TRUE)
+summary_asd<-summary(descriptive_table_asd, labelTranslations = my_labels, title ="ASD Decriptive Statistics", digits=1, pfootnote = FALSE)
+summary_asd
+#write2word(summary_asd, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_biome_demographics_asd.docx") # have to copy paste within console to get the table 
+
+# Create a table with descriptive statistics with "arsenal" package 
+descriptive_table_mia<-tableby(mia_indication ~age + sex + bmi + ASD + participant_type + mats_indication + bristol_stool_chart + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe + age_group, data=descriptive_mia, digits = 2, pfootnote = TRUE)
+summary_mia<-summary(descriptive_table_mia, labelTranslations = my_labels, title ="MIA Decriptive Statistics", digits=2, pfootnote = FALSE)
+summary_mia
+#write2word(summary_mia, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_biome_demographics_mia.docx") # have to copy paste within console to get the table 
+
+# Create a table with descriptive statistics with "arsenal" package 
+descriptive_table_mats<-tableby(mats_indication ~age + sex + bmi + ASD + participant_type + mia_indication + bristol_stool_chart + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe + age_group, data=descriptive_mia, digits = 2, pfootnote = TRUE)
+summary_mats<-summary(descriptive_table_mats, labelTranslations = my_labels, title ="Maternal Stress Decriptive Statistics", digits=2, pfootnote = FALSE)
+summary_mats
+#write2word(summary_mats, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_biome_demographics_mats.docx") # have to copy paste within console to get the table 
+
+# Create a table with descriptive statistics with "arsenal" package 
+descriptive_table_me<-tableby(me_indication ~age + sex + bmi + ASD + participant_type + mia_indication + mats_indication + bristol_stool_chart + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe , data=descriptive_mia, digits = 2, pfootnote = TRUE)
+summary_me<-summary(descriptive_table_me, labelTranslations = my_labels, title ="Maternal Adverse Event Decriptive Statistics", digits=2, pfootnote = FALSE)
+summary_me
+#write2word(summary_me, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_biome_demographics_me.docx") # have to copy paste within console to get the table 
+
+```
+
+
+## Upset plot
+
+```{r}
+
+#install.packages("UpSetR")
+library(UpSetR)
+library(ComplexHeatmap)
+
+
+# Prepare the data in the format required for the upset plot
+data_for_upset <- diet_mia_mats %>%
+  select(mia_acute_inflammation, mia_asthma_allergy, mia_complication, mia_autoimmune, mats_indication) %>%
+  mutate(mia_acute_inflammation = if_else(mia_acute_inflammation == "0", 0, 1),
+         mia_asthma_allergy = if_else(mia_asthma_allergy == "0", 0, 1),
+         mia_complication = if_else(mia_complication == "0", 0, 1),
+         mia_autoimmune = if_else(mia_autoimmune == "0", 0, 1),
+         mats_indication = if_else(mats_indication == "MatS", 1, 0))
+  
+
+# Convert the data to a binary format
+data_for_upset_binary <- as.data.frame(lapply(data_for_upset, function(x) as.numeric(as.character(x))))
+
+# Create a matrix for the upset plot
+data_for_upset_matrix <- as.matrix(data_for_upset_binary)
+rownames(data_for_upset_matrix) <- diet_mia_mats$IID
+
+# Create the combination matrix
+comb_mat <- make_comb_mat(data_for_upset_matrix)
+
+# Draw the UpSet plot
+UpSet(comb_mat)
+
+```
+
+# Taxonomic analysis 
+
+- bacteria - using Microba results
+
+## Initial cleaning
+
+- remove species with lots of 0s (a requirement of ANCOM-BC)
+
+### Formatting and remove samples not intended for this analysis
+
+- remove samples not intended for this analysis
+- rename tables
+- divide read counts by 2 as they're measured individually as paired. Note that David from Microba said that the entire pair is kept or discarded, so dividing by 2 gives equivalent results vs MCPv1 (**only applies to newer taxonomic tables built on MCPv2**)
+
+```{r}
+
+taxa <- fread(taxa_dir, stringsAsFactors = FALSE)
+taxa_count <- fread(taxa_count_dir, stringsAsFactors = FALSE)
+
+# Relative abundance
+count_cols <- grep("BBC", colnames(taxa)) # take MG sample IDs
+colnames(taxa)[count_cols] <- substring(colnames(taxa)[count_cols], 1, 7)
+#colnames(taxa)[2] <- "GTDB.taxonomy"
+taxa <- data.frame(taxa)
+taxa_keep <- which(colnames(taxa) %in% diet_mia_mats$MG_SampleID)
+taxa <- data.frame(Taxon = gsub("s__", "", taxa$Taxon), GTDB.taxonomy = taxa$GTDB.taxonomy, sapply(taxa[,taxa_keep], function(x) x/2), stringsAsFactors = FALSE) # divide read counts by 2
+# Checks
+sums<-colSums(taxa[,3:ncol(taxa)])
+print(paste0("Minimum relative abundance per sample (assigned reads) : ", min(sums)))
+print(paste0("Maximum relative abundance per sample (assigned reads): ", max(sums)))
+
+# Taxa counts
+count_cols <- grep("BBC", colnames(taxa_count))
+colnames(taxa_count)[count_cols] <- substring(colnames(taxa_count)[count_cols], 1, 7)
+#colnames(taxa_count)[2] <- "GTDB.taxonomy"
+taxa_count <- data.frame(taxa_count)
+taxa_count_keep <- which(colnames(taxa_count) %in% diet_mia_mats$MG_SampleID)
+taxa_count <- data.frame(Taxon = gsub("s__", "", taxa_count$Taxon), GTDB.taxonomy = taxa_count$GTDB.taxonomy, sapply(taxa_count[,taxa_count_keep], function(x) x/2), stringsAsFactors = FALSE) # divide read counts by 2
+# Checks
+sums<-colSums(taxa_count[,3:ncol(taxa_count)])
+print(paste0("Minimum counts per sample: ", min(sums)))
+print(paste0("Maximum counts per sample: ", max(sums)))
+
+```
+
+### Initial checks: dimensions and taxonomy
+
+- **not essential**, can leave out if you want
+- https://cran.r-project.org/web/packages/data.tree/vignettes/data.tree.html
+- makes a semi-interactive plot!!
+
+```{r}
+print("Initial taxonomy data dimensions")
+dim(taxa)
+
+# Visualise taxonomy represented
+taxa_name <- as.data.frame(do.call(rbind, strsplit(taxa$GTDB.taxonomy, "; "))) # extract the GTDB.taxonomy and separate input based on ";"
+taxa_name <- apply(taxa_name, 2, function(x) substring(x, 4)) # take the characters after from the 4th character onward
+colnames(taxa_name) <- c("domain", "phylum", "class", "order", "family", "genus")
+taxa_name <- data.frame(taxa_name)
+taxa_name$species <- as.character(taxa$Taxon)
+
+taxa_name$pathString <- paste("GTDB.Taxonomy", taxa_name$domain, taxa_name$phylum, taxa_name$class, taxa_name$order, taxa_name$family, taxa_name$genus, taxa_name$species, sep = "|")
+taxa_tree <- as.Node(taxa_name, pathDelimiter = "|")
+taxa_plot <- ToListExplicit(taxa_tree, unname = TRUE)
+#radialNetwork(taxa_plot) # this makes a BIG plot that is slow
+
+# Check how many species there are
+print(paste("Number of species:", length(unique(taxa_name$species)), sep = " "))
+print(paste("Number of bacterial species:", length(grep("Bacteria", as.character(taxa_name$domain))), sep = " "))
+print(paste("Number of MIC (Microba-specific) species:", length(grep("MIC", as.character(taxa_name$species))), sep = " "))
+
+densityplot(colSums(taxa_count[,3:ncol(taxa_count)])) # Distribution of assigned reads for each sample
+
+```
+
+### Add column of unassigned reads in count table
+
+```{r}
+
+count_cols <- grep("BBC", colnames(taxa_count))
+colnames(sample_qc)[which(colnames(sample_qc) == "ID")] <- "SampleID"
+sample_qc$SampleID <- substring(sample_qc$SampleID, 1, 7)
+sample_qc <- sample_qc %>% filter(SampleID %in% colnames(taxa_count)[2:ncol(taxa_count)]) %>% arrange(SampleID)
+
+sum.tmp <- colSums(data.frame(taxa_count[,count_cols]))
+
+identical(as.character(names(sum.tmp)), colnames(taxa_count[,count_cols]))
+
+unassigned <- as.numeric(sample_qc$TOTAL_DOWNSAMPLED - sum.tmp)
+names(unassigned) <- colnames(taxa_count)[3:ncol(taxa_count)]
+# taxa_count <- rbind(taxa_count, c("UNASSIGNED", "UNASSIGNED", unassigned))
+taxa_count[nrow(taxa_count) + 1,] <- NA
+taxa_count[nrow(taxa_count), "Taxon"] <- "UNASSIGNED"
+taxa_count[nrow(taxa_count), "GTDB.taxonomy"] <- "UNASSIGNED"
+taxa_count[nrow(taxa_count), 3:ncol(taxa_count)] <- unassigned
+
+densityplot(unassigned)
+
+```
+
+### Remove non-bacterial species
+- removed 12 Archaea and 8 Eukaryota 
+
+```{r}
+
+taxa_count<-taxa_count[grep("d__Bacteria|UNASSIGNED", taxa_count$GTDB.taxonomy),]
+taxa<-taxa[grep("d__Bacteria|UNASSIGNED", taxa$GTDB.taxonomy),]
+
+print(paste("Number of species after filtering out non-bacterial species:", (nrow(taxa_count))-1, sep = " ")) #Subtract one because of unassigned reads
+# Checking min and max per sample after filtering out non-bacterial species
+print(paste("Minimum number of species in a sample:", (min(colSums(taxa_count[,3:ncol(taxa_count)] != 0)))-1, sep = " "))
+print(paste("Maximum number of species in a sample:", (max(colSums(taxa_count[,3:ncol(taxa_count)] != 0)))-1, sep = " "))
+
+```
+
+### Check zero counts
+
+- remove taxa with <10 non-zero counts (ie. >164 zero counts)(a.k.a. if only 9 samples have detected a certain taxa, remove this from the analysis)
+- Note: Lutz from Microba said the following:
+    - For univariate (e.g. species/gene/function based) analyses, we remove features depending on the number of samples: for very small datasets (< 20 samples) features present in less than 3 samples are removed; for small datasets (20 - 50 samples), less than 5 samples; otherwise less than 10 samples.
+    - For species/taxa univariate analyses, we additionally only include species/taxa which have at least 100 assigned reads in at least one sample.
+    - The filtering described above is applied post-transformation. First, raw counts are analysed to determine features that will be removed post transformation. Second, raw data is transformed. Third, transformed data is filtered by removing features identified in step 1).
+
+1. Filter 1: based on features across number of samples (<10 non-zero samples)
+2. Filter 2: based on reads across number of samples (<100 assigned reads in at least one sample)
+    - **Note: this step only applies to the taxonomic/species data - NOT the functional data**
+
+```{r}
+
+# Filter 1: based on features across number of samples (<10 non-zero samples)
+zero_count <- unlist(lapply(1:nrow(taxa_count), function(x) length(which(taxa_count[x,] == 0))))
+hist(zero_count)
+zero_rm <- which(zero_count > ((ncol(taxa_count) - 2) - 10)) # removed 1222 species
+zero_rm_taxa <- taxa_count$Taxon[zero_rm] # list of 1222 taxa
+
+# Filter 2: based on reads across number of samples (<100 assigned reads in at least one sample)
+maxcount_reads <- as.numeric(apply(taxa_count[,count_cols],1, max))
+min(maxcount_reads) 
+min(maxcount_reads[maxcount_reads != 0]) #459 is the smallest max count which is not 0, therefore those species are already contained in the first filter
+zero_reads_rm <- which(maxcount_reads < 100) # 216 taxa
+zero_reads_rm_taxa <- taxa_count$Taxon[zero_reads_rm]
+
+# Check if species in filter 2 are in filter 1
+all(zero_reads_rm_taxa %in% zero_rm_taxa) # TRUE-> so no need to apply filter 2
+
+# Remove species
+taxa_rm0 <- taxa[-zero_rm,]
+taxa_count_rm0 <- taxa_count[-zero_rm,]
+
+print("New taxonomy data dimensions")
+nrow(taxa_count) - length(zero_rm) - 1 # -1 because of unassigned reads
+
+
+print(paste("Number of species after filtering out species with low counts (rm0):", (nrow(taxa_count_rm0))-1, sep = " ")) #Subtract one because of unassigned reads
+# Checking min and max per sample after filtering out pecies with low counts (rm0)
+print(paste("Minimum number of species in a sample:", (min(colSums(taxa_count_rm0[,3:ncol(taxa_count_rm0)] != 0)))-1, sep = " "))
+print(paste("Maximum number of species in a sample:", (max(colSums(taxa_count_rm0[,3:ncol(taxa_count_rm0)] != 0)))-1, sep = " "))
+
+
+```
+
+### Visualise taxonomy with reduced features
+
+- also not essential, can leave out
+
+```{r}
+
+taxa_count_rm0.tmp <- taxa_count[-zero_rm,]
+
+# Visualise taxonomy represented
+# https://cran.r-project.org/web/packages/data.tree/vignettes/data.tree.html
+taxa_name_rm0 <- as.data.frame(do.call(rbind, strsplit(taxa_count_rm0.tmp$GTDB.taxonomy, "; ")))
+taxa_name_rm0$species <- as.character(taxa_count_rm0.tmp$Taxon)
+taxa_name_rm0 <- apply(taxa_name_rm0, 2, function(x) substring(x, 4))
+colnames(taxa_name_rm0) <- c("domain", "phylum", "class", "order", "family", "genus", "species")
+taxa_name_rm0 <- data.frame(taxa_name_rm0)
+
+taxa_name_rm0$pathString <- paste("GTDB Taxonomy", taxa_name_rm0$domain, taxa_name_rm0$phylum, taxa_name_rm0$class, taxa_name_rm0$order, taxa_name_rm0$family, taxa_name_rm0$genus, taxa_name_rm0$species, sep = "|")
+taxa_tree <- as.Node(taxa_name_rm0, pathDelimiter = "|")
+taxa_plot <- ToListExplicit(taxa_tree, unname = TRUE)
+# radialNetwork(taxa_plot)
+
+print(paste("Number of bacterial species:", length(grep("Bacteria", as.character(taxa_name_rm0$domain))), sep = " "))
+print(paste("Number of MIC (Microba-specific) species:", length(grep("MIC", as.character(taxa_name_rm0$species))), sep = " "))
+
+```
+
+### Perform centred log-ratio transformation (clr) - ANOVA
+
+- also consider ilr? avoid singularity issues?
+- need to transpose matrix (individuals as rows) before clr-transformation
+- Need to perform clr before removal of low-abundance taxa
+- processing both relative abundance and count data here - I mainly kept to the count data
+
+#### Relative abundance
+
+```{r CLR relative abundance}
+
+# Perform clr
+tmp <- as.matrix(t(taxa[,3:ncol(taxa)])) # transpose dataframe (get individuals as rows and taxa as columns)
+taxa_clr.tmp <- logratio.transfo(tmp, logratio = "CLR", offset = 1) # CLR transform
+taxa_clr.tmp<-t(taxa_clr.tmp)   # transpose it back (taxa as rows)
+class(taxa_clr.tmp) <- "matrix"
+taxa_clr <- data.frame(Taxon = taxa$Taxon, GTDB.taxonomy = taxa$GTDB.taxonomy, taxa_clr.tmp)
+
+# Remove low-abundance taxa
+taxa_rm0_clr <- taxa_clr[-which(taxa_clr$Taxon %in% zero_rm_taxa),]
+
+```
+
+#### Read counts
+
+```{r CLR read counts}
+
+# Perform clr
+tmp <- as.matrix(t(taxa_count[1:(nrow(taxa_count)-1),3:ncol(taxa_count)])) # 1:(nrow(taxa_count)-1 -> remove UNNASIGNED reads 
+taxa_count_clr.tmp <- logratio.transfo(tmp, logratio = "CLR", offset = 1)
+taxa_count_clr.tmp<-t(taxa_count_clr.tmp)   #transpose it back
+class(taxa_count_clr.tmp) <- "matrix"
+taxa_count_clr <- data.frame(Taxon = taxa$Taxon, GTDB.taxonomy = taxa$GTDB.taxonomy, taxa_count_clr.tmp)
+
+# Remove low-abundance taxa
+taxa_count_rm0_clr <- taxa_count_clr[-which(taxa_count_clr$Taxon %in% zero_rm_taxa),]
+
+```
+
+### Prepare the data for lm()
+
+- sort both pheno/covariates file and taxa dataframes to be in the same row order
+- transpose taxa dataframes for input into lm()
+
+#### Transpose relative abundance matrices
+
+- this is more cleaning
+
+```{r}
+
+# Transpose all but the name columns in the matrices
+
+# Read counts, keep 0s non-clr dataframe
+# n <- substring(as.character(taxa_count$Taxon), 4)
+n <- as.character(taxa_count$Taxon) # saving taxa names in a variable
+taxa_count_t <- as.data.frame(t(taxa_count[,-(1:2)]))
+colnames(taxa_count_t) <- n
+taxa_count_t <- data.frame(MG_SampleID = rownames(taxa_count_t), taxa_count_t)
+taxa_count_t <- taxa_count_t[order(taxa_count_t$MG_SampleID),] # sort to be sure to avoid mix-ups
+
+# Read counts, keep 0s clr dataframe
+# n <- substring(as.character(taxa_count$Taxon), 4)
+n <- as.character(taxa_count_clr$Taxon)  # saving taxa names in a variable
+taxa_count_clr_t <- as.data.frame(t(taxa_count_clr[,-(1:2)])) 
+colnames(taxa_count_clr_t) <- n
+taxa_count_clr_t <- data.frame(MG_SampleID = rownames(taxa_count_clr_t), taxa_count_clr_t)
+taxa_count_clr_t <- taxa_count_clr_t[order(taxa_count_clr_t$MG_SampleID),] # sort to be sure to avoid mix-ups
+
+# Read counts, remove 0s non-clr dataframe
+# n <- substring(as.character(taxa_count_rm0$Taxon), 4)
+n <- as.character(taxa_count_rm0$Taxon)
+taxa_count_rm0_t <- as.data.frame(t(taxa_count_rm0[,-(1:2)]))
+colnames(taxa_count_rm0_t) <- n
+taxa_count_rm0_t <- data.frame(MG_SampleID = rownames(taxa_count_rm0_t), taxa_count_rm0_t)
+taxa_count_rm0_t <- taxa_count_rm0_t[order(taxa_count_rm0_t$MG_SampleID),] # sort to be sure to avoid mix-ups
+
+# Read counts, remove 0s clr dataframe
+# n <- substring(as.character(taxa_count_rm0$Taxon), 4)
+n <- as.character(taxa_count_rm0_clr$Taxon)
+taxa_count_rm0_clr_t <- as.data.frame(t(taxa_count_rm0_clr[,-(1:2)]))
+colnames(taxa_count_rm0_clr_t) <- n
+taxa_count_rm0_clr_t <- data.frame(MG_SampleID = rownames(taxa_count_rm0_clr_t), taxa_count_rm0_clr_t)
+taxa_count_rm0_clr_t <- taxa_count_rm0_clr_t[order(taxa_count_rm0_clr_t$MG_SampleID),] # sort to be sure to avoid mix-ups
+
+# Relative abundances, keep 0s non-clr dataframe
+# n <- substring(as.character(taxa$Taxon), 4)
+n <- as.character(taxa$Taxon)
+taxa_t <- as.data.frame(t(taxa[,-(1:2)]))
+colnames(taxa_t) <- n
+taxa_t <- data.frame(MG_SampleID = rownames(taxa_t), taxa_t)
+taxa_t <- taxa_t[order(taxa_t$MG_SampleID),] # sort to be sure to avoid mix-ups
+
+```
+
+### Identify individuals with <7M reads
+
+```{r}
+
+# Find the corresponding IDs
+rm_rarefy_7 <- sample_qc %>% filter(TOTAL_DOWNSAMPLED < 7e6) %>% pull(SampleID)
+rm_rarefy_5.5 <- sample_qc %>% filter(TOTAL_DOWNSAMPLED < 5.5e6) %>% pull(SampleID)
+
+# Find the counts across groups
+diet_mia_mats %>% filter(MG_SampleID %in% rm_rarefy_7) %>% pull(mia_indication) %>% table()
+diet_mia_mats %>% filter(MG_SampleID %in% rm_rarefy_7) %>% pull(mats_indication) %>% table()
+
+# Find the counts across groups
+diet_mia_mats %>% filter(MG_SampleID %in% rm_rarefy_5.5) %>% pull(mia_indication) %>% table()
+diet_mia_mats %>% filter(MG_SampleID %in% rm_rarefy_5.5) %>% pull(mats_indication) %>% table()
+
+```
+## Check Microba genes stats
+
+- total genes in dataframe: 5,165,783
+- total genes with 0 counts in the subset: 618,227
+- total genes in the subset with at least 1 count: 4,547,555
+- total common (median >0): 234,142
+
+```{r eval=FALSE}
+
+library(data.table)
+library(matrixStats)
+
+# Assuming func is a data.table
+selected_columns_logical <- names(func) %in% c('VariableID', diet_mia_mats$MG_SampleID)
+
+# Subset the data.table based on the logical vector
+func_selected <- func[, .SD, .SDcols = selected_columns_logical]
+
+# Couting zeros
+zero_counts <- func_selected[, rowSums(.SD == 0), .SDcols = -c('VariableID')]
+
+# Adding a new column to the data.table to store the count of zeros for each row
+func_selected[, zero_counts := zero_counts]
+
+# Number of Columns excluding 'VariableID' and 'zero_counts'
+num_cols <- ncol(func_selected) - 2
+
+# Get the 'VariableID' where all selected columns have only zeros
+rows_with_only_zeros <- func_selected[zero_counts == num_cols, VariableID]
+
+# Number of Rows with Only Zeros
+num_rows_with_only_zeros <- length(rows_with_only_zeros)
+print(num_rows_with_only_zeros)
+# Number of total genes in the subset with at least 1 count
+print(nrow(func)-(num_rows_with_only_zeros+1))
+
+# Calculate median for each row and then see how many have a median > 0
+medians <- apply(func_selected[,-c('VariableID','zero_counts')], 1, median)
+num_genes_with_median_gt_zero <- sum(medians > 0)
+
+print(num_genes_with_median_gt_zero)
+
+```
+
+# Alpha diversity metrics {.tabset}
+
+## Estimates without covs
+
+```{r}
+
+# Richness calculations (observed species)
+richness.df <- data.frame(MG_SampleID = colnames(taxa_count)[3:ncol(taxa_count)], richness = richness(taxa_count[,3:ncol(taxa_count)],detection = 0)[,1])
+richness.df <- plyr::join(richness.df, diet_mia_mats, by = "MG_SampleID", type = "inner")
+
+# Diversity
+diversity.df <- data.frame(MG_SampleID = colnames(taxa_count)[3:ncol(taxa_count)], shannon =  vegan::diversity(taxa_count_t[,2:ncol(taxa_count_t)], "shannon"), simpson = vegan::diversity(taxa_count_t[,2:ncol(taxa_count_t)], "simpson"))
+diversity.df <- plyr::join(diversity.df, richness.df, by = "MG_SampleID", type = "inner")
+
+```
+
+### Check normality assumptions 
+
+```{r}
+
+# Normality checks for variables
+
+columns_to_test <- c("richness", "shannon", "simpson")
+indicators <- c("mia_indication", "mats_indication", "me_indication")
+
+results_df <- data.frame(Test = character(), Statistic = numeric(), p_value = numeric(), Measure = character())
+
+test_normality_and_variance <- function(column, indicator) {
+  
+  if (indicator == "mats_indication") {
+    group1 <- "noMatS"
+    group2 <- "MatS"
+  } else {
+    group1 <- paste0("no", toupper(sub("_indication", "", indicator)))
+    group2 <- toupper(sub("_indication", "", indicator))
+  }
+  
+  group1_data <- na.omit(diversity.df[diversity.df[, indicator] == group1, column])
+  group2_data <- na.omit(diversity.df[diversity.df[, indicator] == group2, column])
+
+  # Debugging output to check lengths
+  cat(paste("Length of", group1, "for", column, ":", length(group1_data), "\n"))
+  cat(paste("Length of", group2, "for", column, ":", length(group2_data), "\n"))
+
+  shapiro_group1 <- shapiro.test(group1_data)
+  shapiro_group2 <- shapiro.test(group2_data)
+  levene <- leveneTest(as.formula(paste(column, "~", indicator)), data = diversity.df)
+  
+  df <- data.frame(
+    Test = c(paste("Shapiro-Wilk", column, group1),
+             paste("Shapiro-Wilk", column, group2),
+             paste("Levene", column, group1, group2)),
+    Statistic = c(shapiro_group1$statistic,
+                  shapiro_group2$statistic,
+                  levene[1, "F value"]),
+    p_value = c(shapiro_group1$p.value,
+                shapiro_group2$p.value,
+                levene[1, "Pr(>F)"]),
+    Measure = column
+  )
+  
+  return(df)
+}
+
+
+for (column in columns_to_test) {
+  for (indicator in indicators) {
+    results_df <- rbind(results_df, test_normality_and_variance(column, indicator))
+  }
+}
+
+print(results_df)
+
+# Full sample
+shapiro.test(diversity.df$richness)
+shapiro.test(diversity.df$shannon)
+shapiro.test(diversity.df$simpson)
+
+# Save results to Excel
+#write_xlsx(as.data.frame(results_df), "C:/Users/uqsvasil/Documents/PhD/MIA/Data/alpha/mia_alpha_normality_test_results.xlsx")
+
+# Density Plots: MIA
+ggplot(data=diversity.df, aes(x=richness, group=mia_indication, fill=mia_indication)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mia)
+ggplot(data=diversity.df, aes(x=shannon, group=mia_indication, fill=mia_indication)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mia)
+ggplot(data=diversity.df, aes(x=simpson, group=mia_indication, fill=mia_indication)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mia)
+
+# Density Plots: MatS
+ggplot(data=diversity.df, aes(x=richness, group=mats_indication, fill=mats_indication)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mats)
+ggplot(data=diversity.df, aes(x=shannon, group=mats_indication, fill=mats_indication)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mats)
+ggplot(data=diversity.df, aes(x=simpson, group=mats_indication, fill=mats_indication)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mats)
+
+# Density Plots: MIA
+ggplot(data=diversity.df, aes(x=richness, group=mia_new, fill=mia_new)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mia_number)
+ggplot(data=diversity.df, aes(x=shannon, group=mia_new, fill=mia_new)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mia_number)
+ggplot(data=diversity.df, aes(x=simpson, group=mia_new, fill=mia_new)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mia_number)
+
+# Density Plots: MatS
+ggplot(data=diversity.df, aes(x=richness, group=mats_new, fill=mats_new)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mats_number)
+ggplot(data=diversity.df, aes(x=shannon, group=mats_new, fill=mats_new)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mats_number)
+ggplot(data=diversity.df, aes(x=simpson, group=mats_new, fill=mats_new)) + geom_density(adjust=1.5, alpha=.4) + scale_fill_manual(values=color_mats_number)
+
+```
+### Normalise indices
+- for those needed: all
+
+```{r}
+# Richness
+diversity.df$richness_int <- RankNorm(diversity.df$richness)
+
+# Shannon 
+diversity.df$shannon_int <- RankNorm(diversity.df$shannon)
+
+# Simpson - inverse rank normal transformation
+diversity.df$simpson_int <- RankNorm(diversity.df$simpson)
+
+# Run tests and extract results
+results_df_int <- data.frame(Test = character(), Statistic = numeric(), p_value = numeric(), Measure = character())
+columns_to_test <- c("richness_int", "shannon_int", "simpson_int")
+
+for (column in columns_to_test) {
+  for (indicator in indicators) {
+    results_df_int <- rbind(results_df_int, test_normality_and_variance(column, indicator))
+  }
+}
+
+print(results_df_int)
+
+# Save results to Excel
+#write_xlsx(as.data.frame(results_df_int), "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Diversity/mia_alpha_int_normality_test_results.xlsx")
+
+# Check normality for the full sample
+shapiro.test(diversity.df$richness_int)
+shapiro.test(diversity.df$shannon_int) 
+shapiro.test(diversity.df$simpson_int)
+
+```
+
+### Analyses
+#### T-tests
+
+```{r}
+
+# Function to run t-tests and extract results
+t_test_results <- function(data, group_var, group1, group2, response_var, phenotype) {
+  
+  subset_data_1 <- subset(data, data[[group_var]] == group1)
+  subset_data_2 <- subset(data, data[[group_var]] == group2)
+  
+  # Perform t-test
+  t_test_result <- t.test(subset_data_1[[response_var]], subset_data_2[[response_var]], var.equal = TRUE)
+  
+  # Extract means of both groups
+  mean_group1 <- mean(subset_data_1[[response_var]], na.rm = TRUE)
+  mean_group2 <- mean(subset_data_2[[response_var]], na.rm = TRUE)
+  
+  # Extract degrees of freedom and confidence intervals
+  df_val <- t_test_result$parameter
+  conf_int <- t_test_result$conf.int
+  
+  # Convert the results to a data frame
+  df <- data.frame(
+    Test = paste("T-test", group_var, group1, "vs", group2),
+    Statistic = t_test_result$statistic,
+    Degrees_of_Freedom = df_val,
+    p_value = t_test_result$p.value,
+    CI_95_lower = conf_int[1],
+    CI95_lower_upper = conf_int[2],
+    Mean_Group1 = mean_group1,
+    Mean_Group2 = mean_group2,
+    Measure = response_var,
+    Phenotype = phenotype
+  )
+  return(df)
+}
+```
+
+```{r}
+# Run t-tests and extract results
+results_richness_mia <- t_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "richness_int", "MIA")
+results_richness_mats <- t_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "richness_int", "MatS")
+results_richness_me <- t_test_results(diversity.df, "me_indication", "noME", "ME", "richness_int", "ME")
+results_shannon_mia <- t_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "shannon_int", "MIA")
+results_shannon_mats <- t_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "shannon_int", "MatS")
+results_shannon_me <- t_test_results(diversity.df, "me_indication", "noME", "ME", "shannon_int", "ME")
+results_simpson_mia <- t_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "simpson_int", "MIA")
+results_simpson_mats <- t_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "simpson_int", "MatS")
+results_simpson_me <- t_test_results(diversity.df, "me_indication", "noME", "ME", "simpson_int", "ME")
+
+# Combine all results into one dataframe
+results_all <- rbind(
+  results_richness_mia,
+  results_shannon_mia,
+  results_simpson_mia,
+  results_richness_mats,
+  results_shannon_mats,
+  results_simpson_mats,
+  results_richness_me,
+  results_shannon_me,
+  results_simpson_me
+)
+
+# Save results to Excel
+#write_xlsx(as.data.frame(results_all), "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Diversity/mia_t_test_results_no_covs.xlsx")
+
+results_all
+
+# T.test
+t_result <- t.test(richness ~ mia_indication, data=diversity.df)
+print(t_result)
+
+
+```
+
+#### Wilcoxon
+
+```{r}
+
+wilcox_test_results <- function(data, group_var, group1, group2, response_var, phenotype) {
+  
+  subset_data_1 <- subset(data, data[[group_var]] == group1)
+  subset_data_2 <- subset(data, data[[group_var]] == group2)
+  
+  # Check for valid subsets
+  if (nrow(subset_data_1) < 1 || nrow(subset_data_2) < 1) {
+    stop(paste("Invalid subset data for", group1, "or", group2))
+  }
+  
+  # Perform Wilcoxon test
+  wilcox_test_result <- wilcox.test(subset_data_1[[response_var]], subset_data_2[[response_var]], paired = FALSE)
+  
+  # Calculate medians for both groups
+  median_group1 <- median(subset_data_1[[response_var]], na.rm = TRUE)
+  median_group2 <- median(subset_data_2[[response_var]], na.rm = TRUE)
+  
+  # Convert the results to a data frame
+  df <- data.frame(
+    Test = paste("Wilcoxon test", group_var, group1, "vs", group2),
+    W_Statistic = wilcox_test_result$statistic,
+    p_value = wilcox_test_result$p.value,
+    Median_Group1 = median_group1,
+    Median_Group2 = median_group2,
+    Measure = response_var,
+    Phenotype = phenotype
+  )
+  return(df)
+}
+
+
+```
+
+```{r}
+results_richness_mia <- wilcox_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "richness", "MIA")
+results_richness_mats <- wilcox_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "richness", "MatS")
+results_richness_me <- wilcox_test_results(diversity.df, "me_indication", "noME", "ME", "richness", "ME")
+results_shannon_mia <- wilcox_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "shannon", "MIA")
+results_shannon_mats <- wilcox_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "shannon", "MatS")
+results_shannon_me <- wilcox_test_results(diversity.df, "me_indication", "noME", "ME", "shannon", "ME")
+results_simpson_mia <- wilcox_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "simpson", "MIA")
+results_simpson_mats <- wilcox_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "simpson", "MatS")
+results_simpson_me <- wilcox_test_results(diversity.df, "me_indication", "noME", "ME", "simpson", "ME")
+
+# Combine all results into one dataframe
+results_all <- rbind(
+  results_richness_mia,
+  results_shannon_mia,
+  results_simpson_mia,
+  results_richness_mats,
+  results_shannon_mats,
+  results_simpson_mats,
+  results_richness_me,
+  results_shannon_me,
+  results_simpson_me
+)
+
+# Save results to Excel
+#write_xlsx(as.data.frame(results_all), "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Diversity/mia_wilcox_results_no_covs.xlsx")
+
+results_all
+
+```
+
+## Estimates with covariates {.tabset}
+
+### Richness
+
+```{r}
+# Set factors
+diversity.df$sex <- as.factor(diversity.df$sex)
+diversity.df$mia_indication <- factor(diversity.df$mia_indication, levels = c("noMIA", "MIA"))
+diversity.df$mats_indication <- factor(diversity.df$mats_indication, levels = c("noMatS", "MatS"))
+diversity.df$bristol_stool_chart_regroup <- as.numeric(diversity.df$bristol_stool_chart_regroup)
+diversity.df$ASD <- as.factor(diversity.df$ASD)
+
+# Select covariates
+keep <- c("age", "sex", "PC1_diet_pe", "PC2_diet_pe", "PC3_diet_pe")
+
+# Richness
+tmp <- data.frame(richness = diversity.df$richness, diversity.df[,keep])
+tmp.rm <- which(is.na(tmp$PC1_diet_pe))
+if(length(tmp.rm)>0){
+  richness.lm <- lm(richness ~ ., tmp[-tmp.rm,])
+}else{
+  richness.lm <- lm(richness ~ ., tmp)
+}
+summary(richness.lm)
+richness.residuals <- data.frame(MG_SampleID = diversity.df$MG_SampleID, richness_residuals = richness.lm$residuals)
+diversity.df <- plyr::join(diversity.df, richness.residuals, by = "MG_SampleID", type = "inner")
+
+# Check assumptions for linear regression
+# Residuals vs Fitted plot for homoscedasticity & independence
+plot(richness.lm, which=1)
+# Histogram for residuals' normality
+plot(richness.lm, which = 2)
+hist(richness.lm$residuals)
+# Check normality of residuals
+shapiro_richness_residuals<-shapiro.test(richness.lm$residuals)
+shapiro_richness_residuals
+
+# Richness_int
+tmp <- data.frame(richness_int = diversity.df$richness_int, diversity.df[,keep])
+tmp.rm <- which(is.na(tmp$PC1_diet_pe))
+if(length(tmp.rm)>0){
+  richness.lm <- lm(richness_int ~ ., tmp[-tmp.rm,])
+}else{
+  richness.lm <- lm(richness_int ~ ., tmp)
+}
+summary(richness.lm)
+richness.residuals <- data.frame(MG_SampleID = diversity.df$MG_SampleID, richness_int_residuals = richness.lm$residuals)
+diversity.df <- plyr::join(diversity.df, richness.residuals, by = "MG_SampleID", type = "inner")
+
+# Check assumptions for linear regression
+# Residuals vs Fitted plot for homoscedasticity & independence
+plot(richness.lm, which=1)
+# Histogram for residuals' normality
+hist(richness.lm$residuals)
+# Check normality of residuals
+shapiro_richness_int_residuals<-shapiro.test(richness.lm$residuals)
+shapiro_richness_int_residuals
+
+```
+
+### Shannon
+
+```{r}
+
+# Shannon
+tmp <- data.frame(shannon = diversity.df$shannon, diversity.df[,keep])
+shannon.lm <- lm(shannon ~ ., tmp)
+summary(shannon.lm)
+shannon.residuals <- data.frame(MG_SampleID = diversity.df$MG_SampleID, shannon_residuals = shannon.lm$residuals)
+diversity.df <- plyr::join(diversity.df, shannon.residuals, by = "MG_SampleID", type = "inner")
+
+# Check assumptions for linear regression
+# Residuals vs Fitted plot for homoscedasticity & independence
+plot(shannon.lm, which=1)
+# Histogram for residuals' normality
+plot(shannon.lm, which = 2)
+hist(shannon.lm$residuals)
+# Check normality of residuals
+shapiro_shannon_residuals<-shapiro.test(shannon.lm$residuals)
+shapiro_shannon_residuals
+
+# Shannon int
+tmp <- data.frame(shannon = diversity.df$shannon_int, diversity.df[,keep])
+shannon.lm <- lm(shannon ~ ., tmp)
+summary(shannon.lm)
+shannon.residuals <- data.frame(MG_SampleID = diversity.df$MG_SampleID, shannon_int_residuals = shannon.lm$residuals)
+diversity.df <- plyr::join(diversity.df, shannon.residuals, by = "MG_SampleID", type = "inner")
+
+# Check assumptions for linear regression
+# Residuals vs Fitted plot for homoscedasticity & independence
+plot(shannon.lm, which=1)
+# Histogram for residuals' normality
+plot(shannon.lm, which = 2)
+hist(shannon.lm$residuals)
+# Check normality of residuals
+shapiro_shannon_int_residuals<-shapiro.test(shannon.lm$residuals)
+shapiro_shannon_int_residuals
+
+```
+
+### Simpson
+
+```{r}
+
+# Simpson
+tmp.simpson <- data.frame(simpson = diversity.df$simpson, diversity.df[,keep])
+simpson.lm <- lm(simpson ~ ., tmp.simpson)
+summary(simpson.lm)
+simpson.residuals <- data.frame(MG_SampleID = diversity.df$MG_SampleID, simpson_residuals = simpson.lm$residuals)
+diversity.df <- plyr::join(diversity.df, simpson.residuals, by = "MG_SampleID", type = "inner")
+
+# Check assumptions for linear regression
+# Residuals vs Fitted plot for homoscedasticity & independence
+plot(simpson.lm, which=1)
+# Histogram for residuals' normality
+plot(simpson.lm, which = 2)
+hist(simpson.lm$residuals)
+# Check normality of residuals
+shapiro_simpson_residuals<-shapiro.test(simpson.lm$residuals)
+shapiro_simpson_residuals
+
+# Simpson
+tmp.simpson <- data.frame(simpson = diversity.df$simpson_int, diversity.df[,keep])
+simpson.lm <- lm(simpson ~ ., tmp.simpson)
+summary(simpson.lm)
+simpson.residuals <- data.frame(MG_SampleID = diversity.df$MG_SampleID, simpson_int_residuals = simpson.lm$residuals)
+diversity.df <- plyr::join(diversity.df, simpson.residuals, by = "MG_SampleID", type = "inner")
+
+# Check assumptions for linear regression
+# Residuals vs Fitted plot for homoscedasticity & independence
+plot(simpson.lm, which=1)
+# Histogram for residuals' normality
+plot(simpson.lm, which = 2)
+hist(simpson.lm$residuals)
+# Check normality of residuals
+shapiro_simpson_int_residuals<-shapiro.test(simpson.lm$residuals)
+shapiro_simpson_int_residuals
+
+# Export residuals tests
+residuals_normality <- data.frame(
+  Measure = c("richness_residuals", 
+              "richness_int_residuals", 
+              "shannon_residuals", 
+              "shannon_int_residuals", 
+              "simpson_residuals", 
+              "simpson_int_residuals"),
+  Statistic = c(shapiro_richness_residuals$statistic,
+                shapiro_richness_int_residuals$statistic,
+                shapiro_shannon_residuals$statistic,
+                shapiro_shannon_int_residuals$statistic,
+                shapiro_simpson_residuals$statistic,
+                shapiro_simpson_int_residuals$statistic),
+  p_value = c(shapiro_richness_residuals$p.value,
+             shapiro_richness_int_residuals$p.value,
+             shapiro_shannon_residuals$p.value,
+             shapiro_shannon_int_residuals$p.value,
+             shapiro_simpson_residuals$p.value,
+             shapiro_simpson_int_residuals$p.value)
+)
+
+residuals_normality
+
+# Save results to Excel
+#write_xlsx(as.data.frame(residuals_normality), "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Diversity/residuals_normality_results.xlsx")
+
+
+```
+
+### Extract lm results
+
+```{r}
+
+library(broom)
+richness_tidy <- tidy(richness.lm)
+shannon_tidy <- tidy(shannon.lm)
+simpson_tidy <- tidy(simpson.lm)
+
+richness_tidy$measure <- "Richness"
+shannon_tidy$measure <- "Shannon"
+simpson_tidy$measure <- "Simpson"
+
+# Combine the data frames 
+combined_models <- rbind(richness_tidy,
+                         shannon_tidy,
+                         simpson_tidy)
+combined_models <- combined_models[, c("measure", setdiff(names(combined_models), "measure"))]
+
+
+# Write to Excel
+#write_xlsx(as.data.frame(combined_models), "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Diversity/mia_linear_models_int_covariates_results.xlsx")
+
+```
+
+### Anlyses
+
+#### T-tests
+
+```{r}
+
+# Run t-tests and extract results
+results_richness_mia <- t_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "richness_int_residuals", "MIA")
+results_richness_mats <- t_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "richness_int_residuals", "MatS")
+results_richness_me <- t_test_results(diversity.df, "me_indication", "noME", "ME", "richness_int_residuals", "ME")
+results_shannon_mia <- t_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "shannon_int_residuals", "MIA")
+results_shannon_mats <- t_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "shannon_int_residuals", "MatS")
+results_shannon_me <- t_test_results(diversity.df, "me_indication", "noME", "ME", "shannon_int_residuals", "ME")
+results_simpson_mia <- t_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "simpson_int_residuals", "MIA")
+results_simpson_mats <- t_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "simpson_int_residuals", "MatS")
+results_simpson_me <- t_test_results(diversity.df, "me_indication", "noME", "ME", "simpson_int_residuals", "ME")
+
+
+# Combine all results into one dataframe
+results_covs_all <- rbind(
+  results_richness_mia,
+  results_shannon_mia,
+  results_simpson_mia,
+  results_richness_mats,
+  results_shannon_mats,
+  results_simpson_mats,
+  results_richness_me,
+  results_shannon_me,
+  results_simpson_me
+)
+
+results_covs_all
+
+# Save results to Excel
+write_xlsx(as.data.frame(results_covs_all), "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Diversity/mia_t_test_results_with_covs.xlsx")
+
+```
+
+#### Wilcoxon 
+
+```{r}
+
+results_richness_mia <- wilcox_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "richness_residuals", "MIA")
+results_richness_mats <- wilcox_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "richness_residuals", "MatS")
+results_richness_me <- wilcox_test_results(diversity.df, "me_indication", "noME", "ME", "richness_residuals", "ME")
+results_shannon_mia <- wilcox_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "shannon_residuals", "MIA")
+results_shannon_mats <- wilcox_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "shannon_residuals", "MatS")
+results_shannon_me <- wilcox_test_results(diversity.df, "me_indication", "noME", "ME", "shannon_residuals", "ME")
+results_simpson_mia <- wilcox_test_results(diversity.df, "mia_indication", "noMIA", "MIA", "simpson_residuals", "MIA")
+results_simpson_mats <- wilcox_test_results(diversity.df, "mats_indication", "noMatS", "MatS", "simpson_residuals", "MatS")
+results_simpson_me <- wilcox_test_results(diversity.df, "me_indication", "noME", "ME", "simpson_residuals", "ME")
+
+# Combine all results into one dataframe
+results_all <- rbind(
+  results_richness_mia,
+  results_shannon_mia,
+  results_simpson_mia,
+  results_richness_mats,
+  results_shannon_mats,
+  results_simpson_mats,
+  results_richness_me,
+  results_shannon_me,
+  results_simpson_me
+)
+
+# Save results to Excel
+write_xlsx(as.data.frame(results_all), "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Diversity/mia_wilcox_results_covs.xlsx")
+
+results_all
+
+```
+
+
+### Correlation matrix of diveristy by dietary PC by group
+
+- This plot examines the relationship between dietary PCs and richness, stratified by MIA and Mats groups
+- Rows are for each dietary PC (with age and sex regressed out)
+- Columns are for each study group
+- x-axis is the value along each PC
+- y-axis is the richness
+- See a positive correlation in PC3 (reflected in the linear model above) 
+
+#### Richness
+
+```{r}
+# MIA
+richness.df.gg <- diversity.df
+richness.df.gg$richness_resid_age_sex <- lm(richness ~ sex + age, data = richness.df.gg)$residuals
+richness.df.gg <- richness.df.gg %>% dplyr::select(c("mia_indication", "PC1_diet_pe", "PC2_diet_pe", "PC3_diet_pe", "richness_resid_age_sex"))
+richness.df.gg <- melt(richness.df.gg, id.vars = c("mia_indication", "richness_resid_age_sex"), variable.name = "PC", value.name = "PC_value")
+
+ggplot(richness.df.gg, aes(x=PC_value, y=richness_resid_age_sex, colour=mia_indication)) +
+	geom_point() +
+	geom_smooth(method="lm", se = TRUE, colour = "black") +
+  facet_grid(cols = vars(mia_indication), rows = vars(PC)) +
+  scale_color_manual(values=color_mia)
+```
+
+```{r}
+# MatS
+richness.df.gg <- diversity.df
+richness.df.gg$richness_resid_age_sex <- lm(richness ~ sex + age, data = richness.df.gg)$residuals
+richness.df.gg <- richness.df.gg %>% dplyr::select(c("mats_indication", "PC1_diet_pe", "PC2_diet_pe", "PC3_diet_pe", "richness_resid_age_sex"))
+richness.df.gg <- melt(richness.df.gg, id.vars = c("mats_indication", "richness_resid_age_sex"), variable.name = "PC", value.name = "PC_value")
+
+ggplot(richness.df.gg, aes(x=PC_value, y=richness_resid_age_sex, colour=mats_indication)) +
+	geom_point() +
+	geom_smooth(method="lm", se = TRUE, colour = "black") +
+  facet_grid(cols = vars(mats_indication), rows = vars(PC)) +
+  scale_color_manual(values=color_mats)
+
+```
+
+#### Shannon
+
+```{r}
+
+# MIA
+diversity.df.gg <- diversity.df
+diversity.df.gg$shannon_resid_age_sex <- lm(shannon ~ sex + age, data = diversity.df.gg)$residuals
+diversity.df.gg <- diversity.df.gg %>% dplyr::select(c("mia_indication", "PC1_diet_pe", "PC2_diet_pe", "PC3_diet_pe", "shannon_resid_age_sex"))
+diversity.df.gg <- melt(diversity.df.gg, id.vars = c("mia_indication", "shannon_resid_age_sex"), variable.name = "PC", value.name = "PC_value")
+
+ggplot(diversity.df.gg, aes(x=PC_value, y=shannon_resid_age_sex, colour=mia_indication)) +
+	geom_point() +
+	geom_smooth(method="lm", se = TRUE, colour = "black") +
+  facet_grid(cols = vars(mia_indication), rows = vars(PC)) + 
+  scale_color_manual(values=color_mia)
+```
+
+```{r}
+# MatS
+diversity.df.gg <- diversity.df
+diversity.df.gg$shannon_resid_age_sex <- lm(shannon ~ sex + age, data = diversity.df.gg)$residuals
+diversity.df.gg <- diversity.df.gg %>% dplyr::select(c("mats_indication", "PC1_diet_pe", "PC2_diet_pe", "PC3_diet_pe", "shannon_resid_age_sex"))
+diversity.df.gg <- melt(diversity.df.gg, id.vars = c("mats_indication", "shannon_resid_age_sex"), variable.name = "PC", value.name = "PC_value")
+
+ggplot(diversity.df.gg, aes(x=PC_value, y=shannon_resid_age_sex, colour=mats_indication)) +
+	geom_point() +
+	geom_smooth(method="lm", se = TRUE, colour = "black") +
+  facet_grid(cols = vars(mats_indication), rows = vars(PC)) + 
+  scale_color_manual(values=color_mats)
+
+```
+
+### Sensitivity analyses
+
+#### MIA
+
+- meds_antibiotic: 1 (yes) or none reported (0)
+- meds_antibiotic_current: 0(NA), 1 (Yes), 2(No), 3(When needed)
+
+```{r}
+
+# Check IDs of those on antibiotics
+ab_ids<-diversity.df %>% filter(meds_antibiotic_current == 1) %>% pull(MG_SampleID)
+
+# Effect of SIB
+oneway.test(shannon ~ mia_indication, data = diversity.df %>% filter(participant_type != "SIB"))
+oneway.test(shannon_residuals ~ mia_indication, data = diversity.df %>% filter(participant_type != "SIB"))
+
+# Effect of antibiotics
+oneway.test(shannon ~ mia_indication, data = diversity.df %>% filter(!meds_antibiotic_current == 1))
+oneway.test(shannon_residuals ~ mia_indication, data = diversity.df %>% filter(!meds_antibiotic_current == 1))
+
+# Test each covariate
+summary(aov(shannon ~ age + sex + mia_indication, data = diversity.df))
+summary(aov(shannon ~ age + sex + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe + mia_indication, data = diversity.df))
+
+# Effect of probiotics (not one-way test this time)
+summary(aov(shannon ~ as.factor(cam_probiotic) + mia_indication, data = diversity.df))
+summary(aov(shannon ~ as.factor(cam_probiotic) + age + sex + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe + mia_indication, data = diversity.df))
+
+# Effect of probiotics
+oneway.test(richness ~ mia_indication, data = diversity.df %>% filter(!cam_probiotic == 1))
+oneway.test(richness_residuals ~ mia_indication, data = diversity.df %>% filter(!cam_probiotic == 1))
+
+
+# Effect of removing those with <7M reads
+diversity_rarefy.df <- diversity.df %>% filter(!MG_SampleID %in% rm_rarefy_7)
+oneway.test(shannon ~ mia_indication, data = diversity.df %>% filter(!MG_SampleID %in% rm_rarefy_7))
+oneway.test(shannon_residuals ~ mia_indication, data = diversity.df %>% filter(!MG_SampleID %in% rm_rarefy_7))
+
+# Effect of only including paired siblings
+diversity_pairs.df <- diversity.df %>% filter(MG_FID != 0)
+oneway.test(shannon ~ mia_indication, data = diversity_pairs.df)
+oneway.test(shannon_residuals ~ mia_indication, data = diversity_pairs.df)
+
+```
+
+#### MatS
+
+```{r}
+
+# Effect of SIB
+oneway.test(shannon ~ mats_indication, data = diversity.df %>% filter(participant_type != "SIB"))
+oneway.test(shannon_residuals ~ mats_indication, data = diversity.df %>% filter(participant_type != "SIB"))
+
+# Effect of antibiotics
+oneway.test(shannon ~ mats_indication, data = diversity.df %>% filter(!meds_antibiotic_current == 1))
+oneway.test(shannon_residuals ~ mats_indication, data = diversity.df %>% filter(!meds_antibiotic_current == 1))
+
+# Test each covariate
+summary(aov(shannon ~ age + sex + mats_indication, data = diversity.df))
+summary(aov(shannon ~ age + sex + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe + mats_indication, data = diversity.df))
+
+# Effect of probiotics (not one-way test this time)
+summary(aov(shannon ~ as.factor(cam_probiotic) + mats_indication, data = diversity.df))
+summary(aov(shannon ~ as.factor(cam_probiotic) + age + sex + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe + mats_indication, data = diversity.df))
+
+# Effect of removing those with <7M reads
+diversity_rarefy.df <- diversity.df %>% filter(!MG_SampleID %in% rm_rarefy_7)
+oneway.test(shannon ~ mats_indication, data = diversity.df %>% filter(!MG_SampleID %in% rm_rarefy_7))
+oneway.test(shannon_residuals ~ mats_indication, data = diversity.df %>% filter(!MG_SampleID %in% rm_rarefy_7))
+
+# Effect of only including paired siblings
+diversity_pairs.df <- diversity.df %>% filter(MG_FID != 0)
+oneway.test(shannon ~ mats_indication, data = diversity_pairs.df)
+oneway.test(shannon_residuals ~ mats_indication, data = diversity_pairs.df)
+
+```
+
+
+## Plots: no covs
+
+### Data wrangling 
+
+```{r}
+
+alpha_df <- diversity.df
+
+# Pivot file and re-order indices back to original
+alpha_df_longer<-alpha_df %>%
+  pivot_longer(cols=c(richness_int,shannon_int,simpson_int),
+               names_to="metric")
+alpha_df_longer$metric<-factor(alpha_df_longer$metric, levels=c("richness_int","shannon_int","simpson_int"))
+
+```
+
+### Exploratory
+- http://www.sthda.com/english/wiki/ggally-r-package-extension-to-ggplot2-for-correlation-matrix-and-survival-plots-r-software-and-data-visualization 
+
+```{r eval=FALSE}
+
+library(GGally)
+
+# Full sample
+ggcorr(data = alpha_df[,c("richness", "shannon", "simpson", "age","bmi", "PC1_diet_pe", "PC2_diet_pe", "PC3_diet_pe", "mia_indication", "mia_number","mats_indication","mats_number","ASD", "sex", "bristol_stool_chart_regroup")],
+       method = c("pairwise.complete.obs", "pearson"),
+       label = TRUE)
+#ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/correlation_heatmap_alpha.pdf")
+
+# Density correlations
+ggpairs(data = alpha_df[,c("richness", "shannon", "simpson", "age","bmi", "PC1_diet_pe", "PC2_diet_pe", "PC3_diet_pe", "mia_indication", "mia_number","mats_indication","mats_number","ASD", "sex", "bristol_stool_chart_regroup")], 
+        title = "Correlation plot for alpha and other variables", 
+        method = c("pairwise.complete.obs", "pearson"),
+        axisLabels = "show")
+#ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/correlation_plot_alpha.pdf", width = 20, height = 20)
+
+```
+
+### Plot function
+
+```{r}
+
+plot_alpha_facet <- function(data, x_var, y_var, fill_var, palette_colors, 
+                                  title = NULL, y_label = "Value", x_labels = NULL, legend_labels = NULL, 
+                                  facet_var = NULL, comparison_method = "t.test",
+                                  save_path = NULL) {
+  
+  # Basic ggviolin plot
+  p <- ggviolin(data, x = x_var, y = y_var, fill = fill_var,
+                palette = palette_colors,
+                add = "boxplot", 
+                add.params = list(fill = "white")) +
+    facet_wrap(~metric,nrow=1,scales="free_y") +
+    geom_jitter(size = 1) +
+    labs(title = title, x = NULL,y = y_label) +
+    theme(legend.position = "bottom", 
+          legend.text = element_text(size = 10), 
+          legend.direction = "vertical", 
+          legend.box = "vertical")
+  
+  # Add statistical comparison if a method is provided
+  if (!is.null(comparison_method)) {
+    p <- p + stat_compare_means(method = comparison_method, method.args = list(var.equal = TRUE), label.y = -4) # Adjust label.y based on your preference
+  }
+  
+  # Modify x-axis labels if provided
+  if (!is.null(x_labels)) {
+    p <- p + scale_x_discrete(labels = x_labels)
+  }
+  
+  # Modify legend labels if provided
+  if (!is.null(legend_labels)) {
+    p <- p + scale_fill_manual(labels = legend_labels)
+  }
+  
+  # Save plot to file if save_path is provided
+  if (!is.null(save_path)) {
+    ggsave(save_path, plot = p, width = 7, height = 5, dpi = 300) # Adjust size parameters as necessary
+  }
+  
+  return(p)
+}
+
+
+```
+
+### Plot
+
+```{r}
+
+# MIA
+p1 <- plot_alpha_facet(data = alpha_df_longer,
+                            x_var = "mia_indication",
+                            y_var = "value",
+                            fill_var = "mia_indication",
+                            palette_colors = color_mia,
+                            title = "MIA Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_mia_indication_no_covs.pdf")
+
+# MAtS
+p2 <- plot_alpha_facet(data = alpha_df_longer,
+                            x_var = "mats_indication",
+                            y_var = "value",
+                            fill_var = "mats_indication",
+                            palette_colors = color_mats,
+                            title = "MatS Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_mats_indication_no_covs.pdf")
+
+# Maternal event (ME)
+p3 <- plot_alpha_facet(data = alpha_df_longer,
+                            x_var = "me_indication",
+                            y_var = "value",
+                            fill_var = "me_indication",
+                            palette_colors = color_me,
+                            title = "ME Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_me_indication_no_covs.pdf")
+
+
+alpha_plot_combined<-plot_grid(p1, p2, p3, ncol=3, align = "h", axis = "tb")
+alpha_plot_combined
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/alpha_3main_int_no_covs_t_test.pdf", alpha_plot_combined, height = 5, width = 20, dpi = 300)
+
+```
+
+#### Other plots
+
+##### By age 
+
+```{r}
+#Early
+
+# MIA
+p1 <- plot_alpha_facet(data = alpha_df_longer %>% filter(age_group=="early"),
+                            x_var = "mia_indication",
+                            y_var = "value",
+                            fill_var = "mia_indication",
+                            palette_colors = color_mia,
+                            title = "MIA Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_mia_indication_no_covs.pdf")
+
+# MAtS
+p2 <- plot_alpha_facet(data = alpha_df_longer %>% filter(age_group=="early"),
+                            x_var = "mats_indication",
+                            y_var = "value",
+                            fill_var = "mats_indication",
+                            palette_colors = color_mats,
+                            title = "MatS Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_mats_indication_no_covs.pdf")
+
+# Maternal event (ME)
+p3 <- plot_alpha_facet(data = alpha_df_longer %>% filter(age_group=="early"),
+                            x_var = "me_indication",
+                            y_var = "value",
+                            fill_var = "me_indication",
+                            palette_colors = color_me,
+                            title = "ME Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_me_indication_no_covs.pdf")
+
+
+alpha_plot_early<-plot_grid(p1, p2, p3, ncol=3, align = "h", axis = "tb")
+alpha_plot_early
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/alpha_early_int_no_covs_t_test.pdf", alpha_plot_early, height = 5, width = 20, dpi = 300)
+
+
+```
+
+```{r}
+# Middle
+
+# MIA
+p1 <- plot_alpha_facet(data = alpha_df_longer %>% filter(age_group=="middle"),
+                            x_var = "mia_indication",
+                            y_var = "value",
+                            fill_var = "mia_indication",
+                            palette_colors = color_mia,
+                            title = "MIA Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_mia_indication_no_covs.pdf")
+
+# MAtS
+p2 <- plot_alpha_facet(data = alpha_df_longer %>% filter(age_group=="middle"),
+                            x_var = "mats_indication",
+                            y_var = "value",
+                            fill_var = "mats_indication",
+                            palette_colors = color_mats,
+                            title = "MatS Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_mats_indication_no_covs.pdf")
+
+# Maternal event (ME)
+p3 <- plot_alpha_facet(data = alpha_df_longer %>% filter(age_group=="middle"),
+                            x_var = "me_indication",
+                            y_var = "value",
+                            fill_var = "me_indication",
+                            palette_colors = color_me,
+                            title = "ME Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_me_indication_no_covs.pdf")
+
+
+alpha_plot_middle<-plot_grid(p1, p2, p3, ncol=3, align = "h", axis = "tb")
+alpha_plot_middle
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/alpha_middle_int_no_covs_t_test.pdf", alpha_plot_middle, height = 5, width = 20, dpi = 300)
+
+```
+
+```{r}
+# Late
+
+# MIA
+p1 <- plot_alpha_facet(data = alpha_df_longer %>% filter(age_group=="late"),
+                            x_var = "mia_indication",
+                            y_var = "value",
+                            fill_var = "mia_indication",
+                            palette_colors = color_mia,
+                            title = "MIA Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_mia_indication_no_covs.pdf")
+
+# MAtS
+p2 <- plot_alpha_facet(data = alpha_df_longer %>% filter(age_group=="late"),
+                            x_var = "mats_indication",
+                            y_var = "value",
+                            fill_var = "mats_indication",
+                            palette_colors = color_mats,
+                            title = "MatS Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_mats_indication_no_covs.pdf")
+
+# Maternal event (ME)
+p3 <- plot_alpha_facet(data = alpha_df_longer %>% filter(age_group=="late"),
+                            x_var = "me_indication",
+                            y_var = "value",
+                            fill_var = "me_indication",
+                            palette_colors = color_me,
+                            title = "ME Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_me_indication_no_covs.pdf")
+
+
+alpha_plot_late<-plot_grid(p1, p2, p3, ncol=3, align = "h", axis = "tb")
+alpha_plot_late
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/alpha_late_int_no_covs_t_test.pdf", alpha_plot_late, height = 5, width = 20, dpi = 300)
+
+
+```
+
+```{r}
+# MIA x MatS 
+
+# ASD subgroups
+ggviolin(alpha_df_longer, x = "group", y = "value", fill = "group",
+                palette = c("grey","#7C133B","#513286","red"),
+                add = "boxplot", 
+                add.params = list(fill = "white")) +
+    facet_wrap(~metric,nrow=1,scales="free_y") +
+    geom_jitter(size = 1) +
+    #labs(title = title, x = NULL,y = y_label) +
+    theme(legend.position = "bottom", 
+          legend.text = element_text(size = 10), 
+          legend.direction = "vertical", 
+          legend.box = "vertical",
+          axis.text.x = element_text(angle = 45, hjust = 1, size=5))
+
+```
+
+```{r}
+# MIA x ASD 
+
+alpha_df_longer$interaction <- interaction(alpha_df_longer$ASD, alpha_df_longer$mia_indication, sep = " & ")
+# Reorder the levels
+alpha_df_longer$interaction <- factor(alpha_df_longer$interaction, 
+                                      levels = c("nonASD & noMIA", "nonASD & MIA", "ASD & noMIA", "ASD & MIA"))
+
+# ASD subgroups
+ggviolin(alpha_df_longer, x = "interaction", y = "value", fill = "interaction",
+                palette = c("#D8457D", "#7C133B", "#D8457D", "#7C133B"),
+                add = "boxplot", 
+                add.params = list(fill = "white")) +
+    facet_wrap(~metric,nrow=1,scales="free_y") +
+    geom_jitter(size = 1) +
+    #labs(title = title, x = interaction) +
+    theme(legend.position = "bottom", 
+          legend.text = element_text(size = 10), 
+          legend.direction = "vertical", 
+          legend.box = "vertical",
+          axis.text.x = element_text(angle = 45, hjust = 1, size=5)) # This line tilts the x-axis labels
+
+```
+
+
+```{r eval=FALSE}
+
+set.seed(123)
+
+grouped_ggbetweenstats(
+  data  = alpha_df_longer,
+  x     = mia_indication,
+  y     = value,
+  type = "nonparametric",
+  grouping.var = metric,
+  xlab = "MIA",
+  ggplot.component = list(
+  scale_color_manual(values=color_mia)), 
+  plotgrid.args = list(nrow = 1),
+  results.subtitle = TRUE)
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/ggstatplot/mia_alpha_mia_indication_no_covs_new.pdf")
+
+grouped_ggbetweenstats(
+  data  = alpha_df_longer,
+  x     = mats_indication,
+  y     = value,
+  type = "nonparametric",
+  grouping.var = metric,
+  xlab = "Maternal Stress",
+  ggplot.component = list(
+  scale_color_manual(values=color_mats)), 
+  plotgrid.args = list(nrow = 1))
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/ggstatplot/mia_alpha_mats_indication_no_covs_new.pdf")
+
+grouped_ggbetweenstats(
+  data  = alpha_df_longer,
+  x     = me_indication,
+  y     = value,
+  type = "nonparametric",
+  grouping.var = metric,
+  xlab = "Maternal adverse event",
+  ggplot.component = list(
+  scale_color_manual(values=color_me)), 
+  plotgrid.args = list(nrow = 1))
+#ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/ggstatplot/mia_alpha_me_indication_no_covs_new.pdf")
+
+```
+
+## Plots: Covariates
+
+### Combine data
+
+```{r}
+
+# Make data longer
+alpha_df_covs_longer<-alpha_df %>%
+  pivot_longer(cols=c(richness_int_residuals,shannon_int_residuals,simpson_int_residuals),
+               names_to="metric")
+alpha_df_covs_longer$metric<-factor(alpha_df_covs_longer$metric, levels=c("richness_int_residuals","shannon_int_residuals","simpson_int_residuals"))
+
+```
+
+### Exploratory
+- http://www.sthda.com/english/wiki/ggally-r-package-extension-to-ggplot2-for-correlation-matrix-and-survival-plots-r-software-and-data-visualization 
+
+```{r eval=FALSE}
+
+library(GGally)
+
+# Full sample
+ggcorr(data = alpha_df_covs[,c("richness_residuals", "shannon_residuals", "simpson_residuals", "age","bmi", "PC1_diet_pe", "PC2_diet_pe", "PC3_diet_pe", "mia_indication", "mia_number","mats_indication","mats_number","ASD", "sex", "bristol_stool_chart_regroup")],
+       method = c("pairwise.complete.obs", "pearson"),
+       label = TRUE)
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/correlation_heatmap_alpha_covs.pdf")
+
+# Density correlations
+ggpairs(data = alpha_df_covs[,c("richness_residuals", "shannon_residuals", "simpson_residuals", "age","bmi", "PC1_diet_pe", "PC2_diet_pe", "PC3_diet_pe", "mia_indication", "mia_number","mats_indication","mats_number","ASD", "sex", "bristol_stool_chart_regroup")], 
+        title = "Correlation plot for alpha and other variables", 
+        method = c("pairwise.complete.obs", "pearson"),
+        axisLabels = "show")
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/correlation_plot_alpha_covs.pdf", width = 20, height = 20)
+
+```
+
+
+### Plot
+
+```{r}
+
+# MIA
+p1_covs <- plot_alpha_facet(data = alpha_df_covs_longer,
+                            x_var = "mia_indication",
+                            y_var = "value",
+                            fill_var = "mia_indication",
+                            palette_colors = color_mia,
+                            title = "MIA Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_mia_indication_covs.pdf")
+
+# MAtS
+p2_covs <- plot_alpha_facet(data = alpha_df_covs_longer,
+                            x_var = "mats_indication",
+                            y_var = "value",
+                            fill_var = "mats_indication",
+                            palette_colors = color_mats,
+                            title = "MatS Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_mats_indication_covs.pdf")
+
+# Maternal event (ME)
+p3_covs <- plot_alpha_facet(data = alpha_df_covs_longer,
+                            x_var = "me_indication",
+                            y_var = "value",
+                            fill_var = "me_indication",
+                            palette_colors = color_me,
+                            title = "ME Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_me_indication_covs.pdf")
+
+
+alpha_plot_combined_covs<-plot_grid(p1_covs, p2_covs, p3_covs, ncol=3, align = "h", axis = "tb")
+alpha_plot_combined_covs
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/alpha_3main_int_covs_t_test.pdf", alpha_plot_combined_covs, height = 5, width = 20, dpi = 300)
+
+```
+
+
+```{r}
+# MIA x ASD 
+
+alpha_df_covs_longer$interaction <- interaction(alpha_df_covs_longer$ASD, alpha_df_covs_longer$mia_indication, sep = " & ")
+# Reorder the levels
+alpha_df_covs_longer$interaction <- factor(alpha_df_covs_longer$interaction, 
+                                      levels = c("nonASD & noMIA", "nonASD & MIA", "ASD & noMIA", "ASD & MIA"))
+
+my_comparisons <- list( c("nonASD & noMIA", "nonASD & MIA"), c("ASD & noMIA", "ASD & MIA"), c("nonASD & MIA", "ASD & MIA"), c("nonASD & noMIA", "ASD & noMIA") )
+# ASD subgroups
+ggviolin(alpha_df_covs_longer, x = "interaction", y = "value", fill = "interaction",
+                palette = c("#D8457D", "#7C133B", "#D8457D", "#7C133B"),
+                add = "boxplot", 
+                add.params = list(fill = "white")) +
+    facet_wrap(~metric,nrow=1,scales="free_y") +
+    geom_jitter(size = 1) +
+    #labs(title = title, x = interaction) +
+    theme(legend.position = "bottom", 
+          legend.text = element_text(size = 10), 
+          legend.direction = "vertical", 
+          legend.box = "vertical",
+          axis.text.x = element_text(angle = 45, hjust = 1, size=8)) + # This line tilts the x-axis labels
+  stat_compare_means(comparisons = my_comparisons) +
+stat_compare_means(method.args = list(var.equal = TRUE), label.y = -4)
+
+```
+
+##### By age 
+
+```{r}
+#Early
+
+# MIA
+p1 <- plot_alpha_facet(data = alpha_df_covs_longer %>% filter(age_group=="early"),
+                            x_var = "mia_indication",
+                            y_var = "value",
+                            fill_var = "mia_indication",
+                            palette_colors = color_mia,
+                            title = "MIA Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_mia_indication_early_covs.pdf")
+
+# MAtS
+p2 <- plot_alpha_facet(data = alpha_df_covs_longer %>% filter(age_group=="early"),
+                            x_var = "mats_indication",
+                            y_var = "value",
+                            fill_var = "mats_indication",
+                            palette_colors = color_mats,
+                            title = "MatS Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_mats_early_indication_covs.pdf")
+
+# Maternal event (ME)
+p3 <- plot_alpha_facet(data = alpha_df_covs_longer %>% filter(age_group=="early"),
+                            x_var = "me_indication",
+                            y_var = "value",
+                            fill_var = "me_indication",
+                            palette_colors = color_me,
+                            title = "ME Indication",
+                            save_path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/mia_alpha_int_me_indication_early_covs.pdf")
+
+
+alpha_plot_early<-plot_grid(p1, p2, p3, ncol=3, align = "h", axis = "tb")
+alpha_plot_early
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/alpha_plots/alpha_early_int_covs_t_test.pdf", alpha_plot_early, height = 5, width = 20, dpi = 300)
+
+
+```
+
+# Beta diversity metric
+- https://joey711.github.io/phyloseq/import-data.html
+- this, in turn, requires sequence-level data for the various datasets
+
+## Prep
+- from Riffomonas
+
+```{r}
+
+# Transform data into necessary format (long, pivoted)
+taxa_count_t_long <- reshape2::melt(taxa_count_t, id.vars=c("MG_SampleID"), variable.name="Species", value.name = "value") 
+taxa_count_t_long<-as.tibble(taxa_count_t_long)
+
+# Transform data into necessary format (long, pivoted)
+taxa_count_rm0_t_long <- reshape2::melt(taxa_count_rm0_t, id.vars=c("MG_SampleID"), variable.name="Species", value.name = "value") 
+taxa_count_rm0_t_long<-as.tibble(taxa_count_rm0_t_long)
+taxa_count_rm0_t_long$Species<-as.character(taxa_count_rm0_t_long$Species)
+
+# Check total count of reads before filtering  
+  taxa_count_t_long %>%
+  group_by(MG_SampleID) %>%
+  dplyr::summarize(N=sum(value)) %>%
+  arrange(N) %>% print(n=20)
+
+# Check total counts of reads after filtering. 
+  taxa_count_rm0_t_long %>%
+  group_by(MG_SampleID) %>%
+  dplyr::summarize(N=sum(value)) %>%
+  arrange(N) %>% print(n=20)
+  
+metadata_beta <- diet_mia_mats %>% dplyr::select(c("MG_SampleID", "mia_indication", "mats_indication","me_indication", "mia_acute_inflammation","mia_autoimmune", "mia_complication","mia_asthma_allergy","ASD","participant_type", "sex", "age", "PC1_diet_pe", "PC2_diet_pe", "PC3_diet_pe", "mia_subgroup")) # metadata file
+# Create a distance matrix
+metadata_beta$mia_acute_inflammation<-as.factor(metadata_beta$mia_acute_inflammation)
+metadata_beta$mia_complication<-as.factor(metadata_beta$mia_complication)
+metadata_beta$mia_autoimmune<-as.factor(metadata_beta$mia_autoimmune)
+metadata_beta$mia_asthma_allergy<-as.factor(metadata_beta$mia_asthma_allergy)
+rownames(taxa_count_rm0_t) <- NULL # remove rownames from dataframe
+  
+taxa_count_rm0_t_dist<-taxa_count_rm0_t %>%
+    column_to_rownames("MG_SampleID") %>%
+    vegan::avgdist(sample = 5000) # This takes 5M samples from each sample (rarefaction) and removes samples with less reads 
+  
+set.seed(1)
+taxa_count_rm0_t_nmds<- metaMDS(taxa_count_rm0_t_dist) %>%
+  scores(nmds.all, display="site") %>%
+  as.tibble(rownames="MG_SampleID")
+
+metadata_nmds<-inner_join(metadata_beta, taxa_count_rm0_t_nmds)
+
+# By mia_indication
+## Centroid
+centroid<-metadata_nmds %>%
+  group_by(mia_indication) %>% 
+  dplyr::summarize(NMDS1=mean(NMDS1), NMDS2=mean(NMDS2))
+## Plot
+metadata_nmds %>%
+  ggplot(aes(x=NMDS1, y=NMDS2, color=mia_indication)) +
+  geom_point() +
+  stat_ellipse() +
+  geom_point(data=centroid, size=5, shape=21, color="black",
+             aes(fill=mia_indication), fill=color_mia) +
+ scale_color_manual(values=color_mia)
+
+
+
+
+# By mia_subgroup
+## Plot
+metadata_nmds %>%
+  ggplot(aes(x=NMDS1, y=NMDS2, color=mia_subgroup)) +
+  geom_point() +
+  stat_ellipse() +
+  geom_point(data=centroid, size=5, shape=21, color="black",
+             aes(fill=mia_indication), fill=color_mia) +
+ scale_color_manual(values=c("black", "yellow", "gray", "green", "blue", "red"))
+
+
+# By mats_indication
+## Centroid
+centroid<-metadata_nmds %>%
+  group_by(mats_indication) %>% 
+  dplyr::summarize(NMDS1=mean(NMDS1), NMDS2=mean(NMDS2))
+## Plot
+metadata_nmds %>%
+  ggplot(aes(x=NMDS1, y=NMDS2, color=mats_indication)) +
+  geom_point() +
+  stat_ellipse() +
+  geom_point(data=centroid, size=5, shape=21, color="black",
+             aes(fill=mats_indication), fill=color_mats) +
+ scale_color_manual(values=color_mats)
+
+### Adonis
+# mia_indication
+test<-adonis2(taxa_count_rm0_t_dist~metadata_nmds$mia_indication,permutations=999) # can increase number of permutations if you want greater precision of p-value, ~ closer to 0.05
+p_value<-test$`Pr(>F)`[1]
+
+# Sex
+test<-adonis2(taxa_count_rm0_t_dist~metadata_nmds$sex) 
+test
+
+# mia_indication * Sex
+test<-adonis2(taxa_count_rm0_t_dist~metadata_nmds$mia_indication*metadata_nmds$sex) 
+p_value<-test$`Pr(>F)`
+
+# Betadisper - checks for variation between the groups
+bd<-betadisper(taxa_count_rm0_t_dist,metadata_nmds$mia_indication)
+anova(bd)
+permutest(bd)
+
+
+```
+
+## NMDS Plot function
+
+```{r}
+plot_beta_diversity <- function(condition, group_var, title_plot, color_values=NULL, permanova_p, permdisp_p) {
+  
+  # Filter data based on condition
+  if (!is.null(condition)) {
+    metadata_nmds <- metadata_nmds %>% filter(!!condition)
+  }
+  
+  #save_file=paste("trs_plots/beta_plots/trs_biome_", title, ".pdf", sep = "")
+  #pdf(save_file, height=7, width=7)
+  
+
+  ggplot(data = metadata_nmds,aes(x = NMDS1, y = NMDS2, color = !!sym(group_var))) + 
+    geom_point(size=3) +
+    theme(text = element_text(size = 25)) + 
+    scale_color_manual(values = color_values) +
+    labs(title = title_plot) +
+    stat_ellipse(show.legend=FALSE) +
+    geom_point(data=centroid, size=8, shape=21, color="black", fill = color_values,
+               aes(fill=group_var), show.legend=FALSE) +
+    theme(legend.position = "none") +
+    theme_minimal() +
+    guides(color="none")+
+    annotate("text", 
+             x=0.3, 
+             y=-0.38, 
+             size=4.5,
+             label = paste("    PERMANOVA: p=", permanova_p, "/n PERMDISP2: p=", permdisp_p)) +
+  xlim(c(-0.5, 0.65))
+  # unhash these lines to automatise save_file individually + unhash save_file for each plot below; had to hash it because I couldn't create a combined plot otherwise
+  # Save the plot to a file if a filename is provided
+  #if (!is.null(save_file)) {
+  #  ggsave(save_file, width=7, height=7, dpi=300)
+  #}
+  
+
+}
+
+```  
+
+## Weighted Unifrac
+
+### File prep
+
+#### Full physeq file (1731 bacterial species)
+
+```{r}
+
+tree_bacteria <- read_tree(tree_bacteria_dir)
+tree_bacteria$tip.label <- gsub(" ", "_", tree_bacteria$tip.label) # replacing "" with "_" in the tree 
+tree_bacteria$tip.label <- gsub("-", "_", tree_bacteria$tip.label) # replacing "-" with "_" in the tree
+tree_bacteria$tip.label <- gsub("'", "", tree_bacteria$tip.label) # replace ' with nothing in tree 
+
+# Format " " to "_"
+taxa_count.tmp <- taxa_count
+taxa_count.tmp$Taxon <- gsub(" ", "_", taxa_count$Taxon) # replacing "" with "_" in the taxon name
+# Only take bacteria (ie. no archaea)
+#taxa_count_taxan <- taxa_count.tmp$Taxon[which(taxa_count.tmp$Taxon %in% tree_bacteria$tip.label)]
+taxa_count_taxan <- taxa_count.tmp$Taxon[which(taxa_count.tmp$Taxon != "UNASSIGNED")]
+taxa[grep("d__Bacteria|UNASSIGNED", taxa$GTDB.taxonomy),]
+taxa_count_full <- as.matrix(taxa_count.tmp[which(taxa_count.tmp$Taxon %in% taxa_count_taxan),which(colnames(taxa_count.tmp) %in% diet_mia_mats$MG_SampleID)])
+rownames(taxa_count_full) <- taxa_count_taxan
+
+# Format " " to "_"
+taxa_name.tmp <- taxa_name
+taxa_name.tmp$species <- gsub(" ", "_", taxa_name.tmp$species)
+# Only take bacteria (ie. no archaea)
+taxa_name.tmp <- taxa_name.tmp %>% filter(domain == "Bacteria")
+taxa_name_full <- taxa_name.tmp %>% dplyr::select(c("domain", "phylum", "class", "order", "family", "genus", "species"))
+taxa_name_full <- as.matrix(taxa_name_full)
+rownames(taxa_name_full) <- gsub(" ", "_", taxa_count_taxan)
+
+samp_df <- diet_mia_mats
+rownames(samp_df) <- samp_df[,"MG_SampleID"]
+
+otu.mat <- otu_table(taxa_count_full, taxa_are_rows = TRUE)
+tax.mat <- tax_table(taxa_name_full)
+samp.mat <- sample_data(samp_df)
+
+physeq_full <- phyloseq(otu.mat, tax.mat, samp.mat, tree_bacteria)
+unifrac_weighted <- UniFrac(physeq_full, weighted = TRUE)
+# plot_bar(physeq_full, fill = "class", facet_grid=~mia_indication, size=10)
+# plot_tree(physeq_full,)
+
+```
+
+#### Rm0 physeq file  (509 bacterial species)
+
+```{r}
+
+# Format " " to "_"
+taxa_count_rm0.tmp <- taxa_count_rm0
+taxa_count_rm0.tmp$Taxon <- gsub(" ", "_", taxa_count_rm0$Taxon) # replacing "" with "_" in the taxon name
+# Only take bacteria (ie. no archaea)
+taxa_count_taxan_rm0 <- taxa_count_rm0.tmp$Taxon[which(taxa_count_rm0.tmp$Taxon != "UNASSIGNED")]
+taxa[grep("d__Bacteria|UNASSIGNED", taxa$GTDB.taxonomy),]
+taxa_count_rm0_phy <- as.matrix(taxa_count_rm0.tmp[which(taxa_count_rm0.tmp$Taxon %in% taxa_count_taxan_rm0),which(colnames(taxa_count_rm0.tmp) %in% diet_mia_mats$MG_SampleID)])
+rownames(taxa_count_rm0_phy) <- taxa_count_taxan_rm0
+
+# Format " " to "_"
+taxa_name_rm0.tmp <- taxa_name_rm0
+taxa_name_rm0.tmp$species <- gsub(" ", "_", taxa_name_rm0.tmp$species)
+# Only take bacteria (ie. no archaea)
+taxa_name_rm0.tmp <- taxa_name_rm0.tmp %>% filter(domain == "Bacteria")
+taxa_name_rm0 <- taxa_name_rm0.tmp %>% dplyr::select(c("domain", "phylum", "class", "order", "family", "genus", "species"))
+taxa_name_rm0 <- as.matrix(taxa_name_rm0)
+rownames(taxa_name_rm0) <- gsub(" ", "_", taxa_count_taxan_rm0)
+
+
+otu_rm0.mat <- otu_table(taxa_count_rm0_phy, taxa_are_rows = TRUE)
+tax_rm0.mat <- tax_table(taxa_name_rm0)
+
+
+physeq_rm0 <- phyloseq(otu_rm0.mat, tax_rm0.mat, samp.mat, tree_bacteria)
+unifrac_weighted_rm0 <- UniFrac(physeq_rm0, weighted = TRUE)
+# plot_bar(physeq_full, fill = "class", facet_grid=~mia_indication, size=10)
+# plot_tree(physeq_full,)
+
+```
+
+### MIA
+#### PERMANOVA test
+
+- tests whether the compositional "profile" is different
+- uses a pseudo-F-test based on the dissimilarity index (here generated using bray curtis index)
+- H0: centroids of the group are equivalent
+- interpret: https://figshare.com/articles/figure/Heatmap_of_the_Bray-Curtis_distances_between_the_five_sediment_samples_beta_diversity_/11476128
+
+```{r}
+
+set.seed(1)
+
+# MIA
+print("Beta diversity with weighted Unifrac")
+result1<-adonis2(unifrac_weighted ~ mia_indication, data = diet_mia_mats)
+
+print("... with covariates age and sex")
+result2<-adonis2(unifrac_weighted ~ mia_indication + age + sex, data = diet_mia_mats)
+
+print("... with covariates age, sex and diet")
+result3<-adonis2(unifrac_weighted ~ mia_indication + age + sex + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe, data = diet_mia_mats)
+
+```
+
+#### PERMDISP2 
+
+- https://forum.qiime2.org/t/adonis-betadiver-and-betadisp/9364/3
+- tests for difference in the spread/variance within a group compared to others (used to test for beta diversity)
+- eg. can test: "are the centroid differences because of inter-group variance?"
+- multivariate analogue of Levene's test for homogeneity of variance
+- non-Euclidean distances between objects and group centroids: handled by reducing original distances to PCs
+- tested MIA/noMIA 
+
+```{r}
+set.seed(1)
+
+# MIA 
+permdisp2 <- betadisper(unifrac_weighted, diet_mia_mats$mia_indication)
+result4<-anova(permdisp2)
+
+```
+
+#### Plot
+- with NMDS
+
+```{r}
+
+
+# NMDS 
+set.seed(1)
+unifrac_nmds<- metaMDS(unifrac_weighted) %>%
+  scores(nmds.all, display="site") %>%
+  as.tibble(rownames="MG_SampleID")
+metadata_nmds<-inner_join(metadata_beta, unifrac_nmds)
+
+# By MIA
+centroid<-metadata_nmds %>% # Centroid
+  group_by(mia_indication) %>% 
+  dplyr::summarize(NMDS1=mean(NMDS1), NMDS2=mean(NMDS2))
+
+wu_mia<-plot_beta_diversity(condition= NULL,
+                    group_var = "mia_indication",
+                    title_plot = "Weighted Unifrac: MIA", 
+                    color_values = color_mia, 
+                    permanova_p =0.73, 
+                    permdisp_p =0.89)
+wu_mia
+
+```
+### MatS
+#### PERMANOVA test
+
+- tests whether the compositional "profile" is different
+- uses a pseudo-F-test based on the dissimilarity index (here generated using bray curtis index)
+- H0: centroids of the group are equivalent
+- interpret: https://figshare.com/articles/figure/Heatmap_of_the_Bray-Curtis_distances_between_the_five_sediment_samples_beta_diversity_/11476128
+
+```{r}
+
+set.seed(1)
+
+# MatS
+print("Beta diversity with weighted Unifrac")
+mats_result1<-adonis2(unifrac_weighted ~ mats_indication, data = diet_mia_mats)
+
+print("... with covariates age and sex")
+mats_result2<-adonis2(unifrac_weighted ~ mats_indication + age + sex, data = diet_mia_mats)
+
+print("... with covariates age, sex and diet")
+mats_result3<-adonis2(unifrac_weighted ~ mats_indication + age + sex + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe, data = diet_mia_mats)
+
+```
+
+#### PERMDISP2 
+- https://forum.qiime2.org/t/adonis-betadiver-and-betadisp/9364/3
+- tests for difference in the spread/variance within a group compared to others (used to test for beta diversity)
+- eg. can test: "are the centroid differences because of inter-group variance?"
+- multivariate analogue of Levene's test for homogeneity of variance
+- non-Euclidean distances between objects and group centroids: handled by reducing original distances to PCs
+- tested MIA/noMIA 
+
+```{r}
+set.seed(1)
+
+# MatS 
+permdisp2 <- betadisper(unifrac_weighted, diet_mia_mats$mats_indication)
+mats_result4<-anova(permdisp2)
+
+```
+
+#### Plot
+- with NMDS
+
+```{r}
+
+
+# NMDS 
+set.seed(1)
+unifrac_nmds<- metaMDS(unifrac_weighted) %>%
+  scores(nmds.all, display="site") %>%
+  as.tibble(rownames="MG_SampleID")
+metadata_nmds<-inner_join(metadata_beta, unifrac_nmds)
+
+# By MaTs
+
+centroid<-metadata_nmds %>% # Centroid
+  group_by(mats_indication) %>% 
+  dplyr::summarize(NMDS1=mean(NMDS1), NMDS2=mean(NMDS2))
+
+wu_mats<-plot_beta_diversity(condition= NULL,
+                    group_var = "mats_indication",
+                    title_plot = "Weighted Unifrac: MatS", 
+                    color_values = color_mats, 
+                    permanova_p =0.57, 
+                    permdisp_p =0.67)
+wu_mats
+
+beta_wu_combined<-plot_grid(wu_mia, wu_mats, ncol=2, align = "h", axis = "tb")
+beta_wu_combined
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/beta_plots/mia_beta_weighted_unifrac_plot_combined.pdf", beta_wu_combined, height = 4, width = 9, dpi = 600)
+
+```
+
+
+### ME
+#### PERMANOVA test
+
+- tests whether the compositional "profile" is different
+- uses a pseudo-F-test based on the dissimilarity index (here generated using bray curtis index)
+- H0: centroids of the group are equivalent
+- interpret: https://figshare.com/articles/figure/Heatmap_of_the_Bray-Curtis_distances_between_the_five_sediment_samples_beta_diversity_/11476128
+
+```{r}
+
+set.seed(1)
+
+# ME
+print("Beta diversity with weighted Unifrac")
+me_result1<-adonis2(unifrac_weighted ~ me_indication, data = diet_mia_mats)
+
+print("... with covariates age and sex")
+me_result2<-adonis2(unifrac_weighted ~ me_indication + age + sex, data = diet_mia_mats)
+
+print("... with covariates age, sex and diet")
+me_result3<-adonis2(unifrac_weighted ~ me_indication + age + sex + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe, data = diet_mia_mats)
+
+```
+
+#### PERMDISP2 
+- https://forum.qiime2.org/t/adonis-betadiver-and-betadisp/9364/3
+- tests for difference in the spread/variance within a group compared to others (used to test for beta diversity)
+- eg. can test: "are the centroid differences because of inter-group variance?"
+- multivariate analogue of Levene's test for homogeneity of variance
+- non-Euclidean distances between objects and group centroids: handled by reducing original distances to PCs
+- tested MIA/noMIA 
+
+```{r}
+set.seed(1)
+
+# ME 
+permdisp2 <- betadisper(unifrac_weighted, diet_mia_mats$me_indication)
+me_result4<-anova(permdisp2)
+
+```
+
+*Extract results*
+
+```{r}
+write_xlsx(list(
+  "mia_permanova_no_covs" = result1,
+  "mia_permanova_age_sex" = result2,
+  "mia_permanova_age_sex_diet" = result3,
+  "mia_permdisp" = result4,
+  "mats_permanova_no_covs" = mats_result1,
+  "mats_permanova_age_sex" = mats_result2,
+  "mats_permanova_age_sex_diet" = mats_result3,
+  "mats_permdisp" = mats_result4,
+  "me_permanova_no_covs" = me_result1,
+  "me_permanova_age_sex" = me_result2,
+  "me_permanova_age_sex_diet" = me_result3,
+  "me_permdisp" = me_result4),
+  path = "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_beta_results.xlsx")
+
+```
+
+
+#### Plot
+- with NMDS
+
+```{r}
+
+
+# NMDS 
+set.seed(1)
+unifrac_nmds<- metaMDS(unifrac_weighted) %>%
+  scores(nmds.all, display="site") %>%
+  as.tibble(rownames="MG_SampleID")
+metadata_nmds<-inner_join(metadata_beta, unifrac_nmds)
+
+
+# By MaTs
+
+centroid<-metadata_nmds %>% # Centroid
+  group_by(mia_indication) %>% 
+  mutate(me_indication=factor(me_indication)) %>%
+  dplyr::summarize(NMDS1=mean(NMDS1), NMDS2=mean(NMDS2))
+
+wu_me<-plot_beta_diversity(condition= NULL,
+                    group_var = "me_indication",
+                    title_plot = "Weighted Unifrac: ME", 
+                    color_values = color_me, 
+                    permanova_p =0.71, 
+                    permdisp_p =0.99)
+wu_me
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/beta_plots/mia_beta_weighted_unifrac_plot_me.pdf", wu_me, height = 4, width = 3, dpi = 600)
+
+```
+
+## Bray-Curtis 
+
+- Colours on the left side demonstrate groups
+- MIA: red
+- noMIA: blue
+- https://www.molecularecologist.com/2013/08/20/making-heatmaps-with-r-for-microbiome-analysis/
+- https://figshare.com/articles/figure/Heatmap_of_the_Bray-Curtis_distances_between_the_five_sediment_samples_beta_diversity_/11476128 
+
+```{r}
+
+# Create a tmp file where rownames are MG_SampleID, otherwise the braycurtis matrix loses the IDs
+taxa_count_rm0_t.tmp<- taxa_count_rm0_t %>% as.data.frame()
+rownames(taxa_count_rm0_t.tmp) <- taxa_count_rm0_t.tmp$MG_SampleID
+taxa_count_rm0_t.tmp <- taxa_count_rm0_t.tmp[,-1]
+
+set.seed(1)
+braycurtis <- as.matrix(vegdist(taxa_count_rm0_t.tmp[,1:(ncol(taxa_count_rm0_t.tmp)-1)], method = "bray")) # -1 to remove UNASSIGNED read counts
+identical(as.character(taxa_count_rm0_t$MG_SampleID), diet_mia_mats$MG_SampleID)
+
+# MIA
+my_group <- as.numeric(as.factor(diet_mia_mats$mia_indication))
+colSide <- brewer.pal(9, "Set1")[my_group]
+colMain <- colorRampPalette(brewer.pal(9, "Blues"))(25)
+heatmap(braycurtis, RowSideColors = colSide, col = colMain)
+
+```
+### MIA
+#### PERMANOVA test
+
+- tests whether the compositional "profile" is different
+- uses a pseudo-F-test based on the dissimilarity index (here generated using bray curtis index)
+- H0: centroids of the group are equivalent
+- interpret: https://figshare.com/articles/figure/Heatmap_of_the_Bray-Curtis_distances_between_the_five_sediment_samples_beta_diversity_/11476128
+
+```{r}
+set.seed(1)
+print("Beta diversity with Bray-Curtis index")
+
+# MIA
+print("... by mia_indication")
+#ind <- data.table(mia_indication = diet$mia_indication)
+adonis2(braycurtis ~ mia_indication, data = diet_mia_mats)
+adonis2(braycurtis ~ mia_indication + age + sex, data = diet_mia_mats)
+adonis2(braycurtis ~ mia_indication + age + sex + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe, data = diet_mia_mats)
+
+```
+
+#### PERMDISP2
+
+- https://forum.qiime2.org/t/adonis-betadiver-and-betadisp/9364/3
+- tests for difference in the spread/variance within a group compared to others (used to test for beta diversity)
+- eg. can test: "are the centroid differences because of inter-group variance?"
+- multivariate analogue of Levene's test for homogeneity of variance
+- non-Euclidean distances between objects and group centroids: handled by reducing original distances to PCs
+- tested MIA/noMIA 
+
+```{r}
+set.seed(1)
+# MIA 
+braycurtis.dist <- as.dist(braycurtis)
+permdisp2_bc <- betadisper(braycurtis.dist, diet_mia_mats$mia_indication)
+anova(permdisp2)
+
+```
+
+#### Plot
+
+```{r}
+
+# NMDS 
+set.seed(1)
+braycurtis_nmds<- metaMDS(braycurtis) %>%
+  scores(nmds.all, display="site") %>%
+  as.tibble(rownames="MG_SampleID")
+metadata_nmds<-inner_join(metadata_beta, braycurtis_nmds)
+
+# By MIA
+centroid<-metadata_nmds %>% # Centroid
+  group_by(mia_indication) %>% 
+  dplyr::summarize(NMDS1=mean(NMDS1), NMDS2=mean(NMDS2))
+
+bc_mia<-plot_beta_diversity(condition= NULL,
+                    group_var = "mia_indication",
+                    title_plot = "Bray-Curtis: MIA", 
+                    color_values = color_mia, 
+                    permanova_p =0.54, 
+                    permdisp_p =0.67)
+bc_mia
+
+```
+
+### MatS
+#### PERMANOVA test
+
+```{r}
+set.seed(1)
+#MatS
+print("... by mats_indication")
+#ind <- data.table(mats_indication = diet$mats_indication)
+adonis2(braycurtis ~ mats_indication, data = diet_mia_mats)
+adonis2(braycurtis ~ mats_indication + age + sex, data = diet_mia_mats)
+adonis2(braycurtis ~ mats_indication + age + sex + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe, data = diet_mia_mats)
+
+```
+
+#### PERMDISP2
+
+```{r}
+set.seed(1)
+#MatS braycurtis
+braycurtis.dist <- as.dist(braycurtis)
+permdisp2 <- betadisper(braycurtis.dist, diet_mia_mats$mats_indication)
+anova(permdisp2)
+
+```
+
+#### Plot
+
+```{r}
+
+# NMDS 
+set.seed(1)
+braycurtis_nmds<- metaMDS(braycurtis) %>%
+  scores(nmds.all, display="site") %>%
+  as.tibble(rownames="MG_SampleID")
+metadata_nmds<-inner_join(metadata_beta, braycurtis_nmds)
+
+# By MIA
+centroid<-metadata_nmds %>% # Centroid
+  group_by(mats_indication) %>% 
+  dplyr::summarize(NMDS1=mean(NMDS1), NMDS2=mean(NMDS2))
+
+bc_mats<-plot_beta_diversity(condition= NULL,
+                    group_var = "mats_indication",
+                    title_plot = "Bray-Curtis: MatS", 
+                    color_values = color_mats, 
+                    permanova_p =0.64, 
+                    permdisp_p =0.32)
+bc_mats
+
+beta_bc_combined<-plot_grid(bc_mia, bc_mats, ncol=2, align = "h", axis = "tb")
+beta_bc_combined
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/beta_plots/mia_beta_bray_curtis_plot_combined.pdf", beta_bc_combined, height = 4, width = 9, dpi = 600)
+
+
+```
+
+### ME
+#### PERMANOVA test
+
+```{r}
+set.seed(1)
+#MatS
+print("... by me_indication")
+#ind <- data.table(me_indication = diet$me_indication)
+adonis2(braycurtis ~ me_indication, data = diet_mia_mats)
+adonis2(braycurtis ~ me_indication + age + sex, data = diet_mia_mats)
+adonis2(braycurtis ~ me_indication + age + sex + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe, data = diet_mia_mats)
+
+```
+
+#### PERMDISP2
+
+```{r}
+set.seed(1)
+#MatS braycurtis
+braycurtis.dist <- as.dist(braycurtis)
+permdisp2 <- betadisper(braycurtis.dist, diet_mia_mats$me_indication)
+anova(permdisp2)
+
+```
+
+#### Plot
+
+```{r}
+
+# NMDS 
+set.seed(1)
+braycurtis_nmds<- metaMDS(braycurtis) %>%
+  scores(nmds.all, display="site") %>%
+  as.tibble(rownames="MG_SampleID")
+metadata_nmds<-inner_join(metadata_beta, braycurtis_nmds)
+
+# By MIA
+centroid<-metadata_nmds %>% # Centroid
+  group_by(me_indication) %>% 
+  dplyr::summarize(NMDS1=mean(NMDS1), NMDS2=mean(NMDS2))
+
+bc_me<-plot_beta_diversity(condition= NULL,
+                    group_var = "me_indication",
+                    title_plot = "Bray-Curtis: ME", 
+                    color_values = color_me, 
+                    permanova_p =0.87, 
+                    permdisp_p =0.24)
+bc_me
+
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/Figures/beta_plots/mia_beta_bray_curtis_plot_me.pdf", beta_bc_combined, height = 4, width = 9, dpi = 600)
+
+
+```
+
+## Ordination - no covariates, MIA/noMIA
+
+### Pre-processing
+
+**Methods**
+
+- http://mixomics.org/mixmc/mixmc-pre-processing/
+- offset (add 1 to all data, but can use other methods) to handle log transformation
+- remove low counts (1% threshold)
+- clr transformation
+
+
+**Other notes**
+
+- Reassuring to see that PC plots confirm what is demonstrated by PERMANOVA/PERMDISP
+    - that QTAB spread and centroid is slightly different
+  
+
+```{r}
+
+#rm_diet <- which(is.na(diet_mia_mats$PC1_diet_pe))
+data <- taxa_t[,2:ncol(taxa_t)]
+Y <- as.factor(diet_mia_mats$mia_indication)
+
+data_rm0 <- taxa_count_rm0_t[, 2:ncol(taxa_count_rm0_t),]
+data_rm0 <- as.matrix(data_rm0)
+
+data_rm0_offset_clr <- logratio.transfo(data_rm0, logratio = 'CLR', offset = 1)
+sum(which(data_rm0_offset_clr == 0)) # should == 0
+
+```
+
+### PCA 
+
+- Variance explained by first 2 PCs is low (9% and 4%)
+- Try stratifying by age, PC2 (as this is associated with age)
+
+```{r warning = FALSE}
+# MIA
+data_rown <- rownames(data_rm0_offset_clr)
+rownames(data_rm0_offset_clr) <- NULL
+data_rm0_offset_clr.pca <- pca(data_rm0_offset_clr, ncomp = 10)
+
+plot(data_rm0_offset_clr.pca)
+
+plotIndiv(data_rm0_offset_clr.pca, comp = c(1,2), 
+          group = Y, 
+          ind.names = FALSE,
+          legend = TRUE, title = "MIA PCA: clr-transformed, rm0",
+          ellipse = TRUE, centroid = T,
+          col.per.group = color_mia) # changing colours
+
+plotIndiv(data_rm0_offset_clr.pca, comp = c(1,2), 
+          group = diet_mia_mats$mats_indication, 
+          ind.names = FALSE,
+          legend = TRUE, title = "MIA PCA: clr-transformed, rm0",
+          ellipse = TRUE, centroid = T,
+          col.per.group = color_mats) 
+
+plotIndiv(data_rm0_offset_clr.pca, comp = c(1,2), 
+          group = diet_mia_mats$me_indication, 
+          ind.names = FALSE,
+          legend = TRUE, title = "MIA PCA: clr-transformed, rm0",
+          ellipse = TRUE, centroid = T,
+          col.per.group = color_me) 
+
+plotIndiv(data_rm0_offset_clr.pca, comp = c(1,2), 
+          group = round(diet_mia_mats$age, 0), 
+          ind.names = F, pch = 1,
+          legend = TRUE, legend.title = "Age", title = "MIA rm0 clr PC",
+          ellipse = TRUE, centroid = T)
+
+plotIndiv(data_rm0_offset_clr.pca, comp = c(1,2), 
+          group = round(diet_mia_mats$PC1_diet_pe, 0), 
+          ind.names = TRUE,
+          legend = TRUE, legend.title = "Dietary PC1", title = "MIA rm0 clr PC, Diet PC1",
+          ellipse = TRUE, centroid = T)
+
+plotIndiv(data_rm0_offset_clr.pca, comp = c(1,2), 
+          group = round(diet_mia_mats$PC2_diet_pe, 0), 
+          ind.names = TRUE,
+          legend = TRUE, legend.title = "Dietary PC2", title = "MIA rm0 clr PC, Diet PC2",
+          ellipse = TRUE, centroid = T)
+
+# return the rownames
+rownames(data_rm0_offset_clr) <- data_rown
+
+```
+
+**For comparison: a plot without the pre-processing filters (with clr transform)** 
+
+```{r}
+
+taxa_count_clr_t.pca <- pca(taxa_count_clr_t[2:ncol(taxa_count_clr_t)], ncomp = 15)
+
+plot(taxa_count_clr_t.pca)
+
+plotIndiv(taxa_count_clr_t.pca, comp = c(1,2), 
+          group = as.factor(diet_mia_mats$mia_indication), 
+          indiv.names = F,
+          legend = TRUE, title = "MIA PC (NO filters)",
+          ellipse = TRUE, centroid = T)
+
+```
+
+## Ordination - no covariates, MatS/ no Mats
+
+### Pre-processing
+
+**Methods**
+
+- http://mixomics.org/mixmc/mixmc-pre-processing/
+- offset (add 1 to all data, but can use other methods) to handle log transformation
+- remove low counts (1% threshold)
+- clr transformation
+
+
+**Other notes**
+
+- Reassuring to see that PC plots confirm what is demonstrated by PERMANOVA/PERMDISP
+    - that QTAB spread and centroid is slightly different
+  
+### Pre-processing 
+
+```{r}
+
+#rm_diet <- which(is.na(diet_mia_mats$PC1_diet_pe))
+data <- taxa_t[,2:ncol(taxa_t)]
+Y <- as.factor(diet_mia_mats$mats_indication)
+
+data_rm0 <- taxa_count_rm0_t[, 2:ncol(taxa_count_rm0_t),]
+data_rm0 <- as.matrix(data_rm0)
+
+data_rm0_offset_clr <- logratio.transfo(data_rm0, logratio = 'CLR', offset = 1)
+sum(which(data_rm0_offset_clr == 0)) # should == 0
+
+```
+
+### PCA 
+
+- Variance explained by first 2 PCs is low (9% and 4%)
+- Try stratifying by age, PC2 (as this is associated with age)
+- Repeat plots with different formatting for figure
+```{r eval = FALSE}
+# MatS
+data_rown <- rownames(data_rm0_offset_clr)
+rownames(data_rm0_offset_clr) <- NULL
+data_rm0_offset_clr.pca <- pca(data_rm0_offset_clr, ncomp = 10)
+
+plot(data_rm0_offset_clr.pca)
+
+plotIndiv(data_rm0_offset_clr.pca, comp = c(1,2), 
+          group = Y, 
+          ind.names = FALSE,
+          legend = TRUE, title = "MatS PCA: clr-transformed, rm0",
+          ellipse = TRUE, centroid = T,
+          col.per.group = c('darkmagenta','darkgoldenrod1')) # changing colours
+
+plotIndiv(data_rm0_offset_clr.pca, comp = c(1,2), 
+          group = round(diet_mia_mats$age, 0), 
+          ind.names = F, pch = 1,
+          legend = TRUE, legend.title = "Age", title = "MatS rm0 clr PC",
+          ellipse = TRUE, centroid = T)
+
+plotIndiv(data_rm0_offset_clr.pca, comp = c(1,2), 
+          group = round(diet_mia_mats$PC1_diet_pe, 0), 
+          ind.names = TRUE,
+          legend = TRUE, legend.title = "Dietary PC1", title = "MatS rm0 clr PC, Diet PC1",
+          ellipse = TRUE, centroid = T)
+
+plotIndiv(data_rm0_offset_clr.pca, comp = c(1,2), 
+          group = round(diet_mia_mats$PC2_diet_pe, 0), 
+          ind.names = TRUE,
+          legend = TRUE, legend.title = "Dietary PC2", title = "MatS rm0 clr PC, Diet PC2",
+          ellipse = TRUE, centroid = T)
+
+# return the rownames
+rownames(data_rm0_offset_clr) <- data_rown
+
+```
+
+# Presence/absence metrics, Fisher's exact test
+- uses counts
+- This analysis keeps zeros (no rm0 filter)
+
+### MIA vs noMIA
+
+- some are at a nominal threshold
+- top is F. torques (p=4e-4) - most salient in the MIA vs nonMIA comparison, but not passing FDR
+
+```{r}
+
+taxa_count_t.tmp <- taxa_count_t %>% filter(MG_SampleID %in% diet_mia_mats$MG_SampleID)
+
+diet.mia <- diet_mia_mats %>% filter(mia_indication == "MIA")
+diet.nomia <- diet_mia_mats %>% filter(mia_indication == "noMIA")
+taxa_count_t.tmp.mia <- taxa_count_t.tmp %>% filter(MG_SampleID %in% diet.mia$MG_SampleID)
+taxa_count_t.tmp.nomia <- taxa_count_t.tmp %>% filter(MG_SampleID %in% diet.nomia$MG_SampleID)
+
+mia.nonzero <- colSums(taxa_count_t.tmp.mia != 0)
+nomia.nonzero <- colSums(taxa_count_t.tmp.nomia != 0)
+
+species.nonzero <- data.frame(Taxon = names(mia.nonzero), mia = unname(mia.nonzero), nomia = unname(nomia.nonzero))
+
+```
+
+```{r}
+
+# Fisher's exact test
+# table(diet_mia_mats$mia_indication) - to get numbers
+nmia <- 63
+nnomia <- 111
+fisher.p <- NULL
+for (i in 1:nrow(species.nonzero)) {
+  tmp.ma <- matrix(nrow=2, ncol=2)
+  tmp.ma[1,1] <- species.nonzero$mia[i]
+  tmp.ma[1,2] <- species.nonzero$nomia[i]
+  tmp.ma[2,1] <- nmia-species.nonzero$mia[i]
+  tmp.ma[2,2] <- nnomia-species.nonzero$nomia[i]
+  colnames(tmp.ma) <- c("MIA", "noMIA")
+  out.p <- fisher.test(tmp.ma)$p.value
+  fisher.p <- c(fisher.p, out.p)
+}
+
+species.nonzero <- data.frame(species.nonzero, p_Fisher = signif(fisher.p, 2), p_Fisher_FDR = signif(p.adjust(fisher.p, method = "fdr"), 2))
+
+datatable(species.nonzero, rownames = FALSE, filter="top", options = list(pageLength = 5, scrollX=T) )
+
+write.csv(species.nonzero, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Fishers/taxa_species_fishers_test_mia.csv", row.names = F, quote = F)
+
+```
+
+### MIA acute vs true negative control 
+
+```{r}
+
+#taxa_count_t.tmp <- taxa_count_t %>% filter(MG_SampleID %in% diet_mia_mats$MG_SampleID)
+taxa_count_t.tmp <- taxa_count_t %>% filter(MG_SampleID %in% acute_negative_IDs)
+
+diet_mia_mats$mia_acute_cat<- ifelse(diet_mia_mats$mia_acute_inflammation > 0, "aMIA", "noMIA")
+diet_mia_mats$mia_acute_cat<-factor(diet_mia_mats$mia_acute_cat)
+
+diet.mia <- diet_mia_mats %>% filter(mia_acute_cat == "aMIA")
+diet.nomia <- diet_mia_mats %>% filter(mia_acute_cat == "noMIA")
+taxa_count_t.tmp.mia <- taxa_count_t.tmp %>% filter(MG_SampleID %in% diet.mia$MG_SampleID)
+taxa_count_t.tmp.nomia <- taxa_count_t.tmp %>% filter(MG_SampleID %in% diet.nomia$MG_SampleID)
+
+mia.nonzero <- colSums(taxa_count_t.tmp.mia != 0)
+nomia.nonzero <- colSums(taxa_count_t.tmp.nomia != 0)
+
+species.nonzero <- data.frame(Taxon = names(mia.nonzero), mia = unname(mia.nonzero), nomia = unname(nomia.nonzero))
+
+```
+
+```{r}
+
+# Fisher's exact test
+# table(diet_mia_mats$mia_indication) - to get numbers
+nmia <- 23
+nnomia <- 60
+fisher.p <- NULL
+for (i in 1:nrow(species.nonzero)) {
+  tmp.ma <- matrix(nrow=2, ncol=2)
+  tmp.ma[1,1] <- species.nonzero$mia[i]
+  tmp.ma[1,2] <- species.nonzero$nomia[i]
+  tmp.ma[2,1] <- nmia-species.nonzero$mia[i]
+  tmp.ma[2,2] <- nnomia-species.nonzero$nomia[i]
+  colnames(tmp.ma) <- c("aMIA", "noMIA")
+  out.p <- fisher.test(tmp.ma)$p.value
+  fisher.p <- c(fisher.p, out.p)
+}
+
+species.nonzero <- data.frame(species.nonzero, p_Fisher = signif(fisher.p, 2), p_Fisher_FDR = signif(p.adjust(fisher.p, method = "fdr"), 2))
+
+datatable(species.nonzero, rownames = FALSE, filter="top", options = list(pageLength = 5, scrollX=T) )
+
+#write.csv(species.nonzero, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Fishers/taxa_species_fishers_test_acute_mia.csv", row.names = F, quote = F)
+
+```
+
+### MIA only vs true negative control 
+
+```{r}
+
+taxa_count_t.tmp <- taxa_count_t %>% filter(MG_SampleID %in% MIA_true_IDs)
+
+diet_mia_mats$group<-factor(diet_mia_mats$group)
+
+diet.mia <- diet_mia_mats %>% filter(group == "MIA_only")
+diet.nomia <- diet_mia_mats %>% filter(group == "none")
+taxa_count_t.tmp.mia <- taxa_count_t.tmp %>% filter(MG_SampleID %in% diet.mia$MG_SampleID)
+taxa_count_t.tmp.nomia <- taxa_count_t.tmp %>% filter(MG_SampleID %in% diet.nomia$MG_SampleID)
+
+mia.nonzero <- colSums(taxa_count_t.tmp.mia != 0)
+nomia.nonzero <- colSums(taxa_count_t.tmp.nomia != 0)
+
+species.nonzero <- data.frame(Taxon = names(mia.nonzero), mia = unname(mia.nonzero), nomia = unname(nomia.nonzero))
+
+```
+
+```{r}
+
+# Fisher's exact test
+# table(diet_mia_mats$mia_indication) - to get numbers
+nmia <- 30
+nnomia <- 60
+fisher.p <- NULL
+for (i in 1:nrow(species.nonzero)) {
+  tmp.ma <- matrix(nrow=2, ncol=2)
+  tmp.ma[1,1] <- species.nonzero$mia[i]
+  tmp.ma[1,2] <- species.nonzero$nomia[i]
+  tmp.ma[2,1] <- nmia-species.nonzero$mia[i]
+  tmp.ma[2,2] <- nnomia-species.nonzero$nomia[i]
+  colnames(tmp.ma) <- c("MIA", "noMIA")
+  out.p <- fisher.test(tmp.ma)$p.value
+  fisher.p <- c(fisher.p, out.p)
+}
+
+species.nonzero <- data.frame(species.nonzero, p_Fisher = signif(fisher.p, 2), p_Fisher_FDR = signif(p.adjust(fisher.p, method = "fdr"), 2))
+
+datatable(species.nonzero, rownames = FALSE, filter="top", options = list(pageLength = 5, scrollX=T) )
+
+write.csv(species.nonzero, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Fishers/taxa_species_fishers_test_mia_true.csv", row.names = F, quote = F)
+
+```
+### MIA late
+
+```{r}
+
+taxa_count_t.tmp <- taxa_count_t %>% filter(MG_SampleID %in% late_IDs)
+
+diet.mia <- diet_mia_mats %>% filter(mia_indication == "MIA")
+diet.nomia <- diet_mia_mats %>% filter(mia_indication == "noMIA")
+taxa_count_t.tmp.mia <- taxa_count_t.tmp %>% filter(MG_SampleID %in% diet.mia$MG_SampleID)
+taxa_count_t.tmp.nomia <- taxa_count_t.tmp %>% filter(MG_SampleID %in% diet.nomia$MG_SampleID)
+
+mia.nonzero <- colSums(taxa_count_t.tmp.mia != 0)
+nomia.nonzero <- colSums(taxa_count_t.tmp.nomia != 0)
+
+species.nonzero <- data.frame(Taxon = names(mia.nonzero), mia = unname(mia.nonzero), nomia = unname(nomia.nonzero))
+
+```
+
+```{r}
+
+# Fisher's exact test
+# table(diet_mia_mats$mia_indication) - to get numbers
+nmia <- 16
+nnomia <- 26
+fisher.p <- NULL
+for (i in 1:nrow(species.nonzero)) {
+  tmp.ma <- matrix(nrow=2, ncol=2)
+  tmp.ma[1,1] <- species.nonzero$mia[i]
+  tmp.ma[1,2] <- species.nonzero$nomia[i]
+  tmp.ma[2,1] <- nmia-species.nonzero$mia[i]
+  tmp.ma[2,2] <- nnomia-species.nonzero$nomia[i]
+  colnames(tmp.ma) <- c("MIA", "noMIA")
+  out.p <- fisher.test(tmp.ma)$p.value
+  fisher.p <- c(fisher.p, out.p)
+}
+
+species.nonzero <- data.frame(species.nonzero, p_Fisher = signif(fisher.p, 2), p_Fisher_FDR = signif(p.adjust(fisher.p, method = "fdr"), 2))
+
+datatable(species.nonzero, rownames = FALSE, filter="top", options = list(pageLength = 5, scrollX=T) )
+
+write.csv(species.nonzero, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Fishers/taxa_species_fishers_test_mia_late.csv", row.names = F, quote = F)
+
+```
+
+### MatS
+
+```{r}
+
+taxa_count_t.tmp <- taxa_count_t %>% filter(MG_SampleID %in% diet_mia_mats$MG_SampleID)
+
+diet.mats <- diet_mia_mats %>% filter(mats_indication == "MatS")
+diet.nomats <- diet_mia_mats %>% filter(mats_indication == "noMatS")
+taxa_count_t.tmp.mats <- taxa_count_t.tmp %>% filter(MG_SampleID %in% diet.mats$MG_SampleID)
+taxa_count_t.tmp.nomats <- taxa_count_t.tmp %>% filter(MG_SampleID %in% diet.nomats$MG_SampleID)
+
+mats.nonzero <- colSums(taxa_count_t.tmp.mats != 0)
+nomats.nonzero <- colSums(taxa_count_t.tmp.nomats != 0)
+
+species.nonzero <- data.frame(Taxon = names(mats.nonzero), mats = unname(mats.nonzero), nomats = unname(nomats.nonzero))
+
+```
+
+```{r}
+
+# Fisher's exact test
+# table(diet_mia_mats$mats_indication) - to get numbers
+nmats <- 84
+nnomats <- 90
+fisher.p <- NULL
+for (i in 1:nrow(species.nonzero)) {
+  tmp.ma <- matrix(nrow=2, ncol=2)
+  tmp.ma[1,1] <- species.nonzero$mats[i]
+  tmp.ma[1,2] <- species.nonzero$nomats[i]
+  tmp.ma[2,1] <- nmats-species.nonzero$mats[i]
+  tmp.ma[2,2] <- nnomats-species.nonzero$nomats[i]
+  colnames(tmp.ma) <- c("MatS", "noMatS")
+  out.p <- fisher.test(tmp.ma)$p.value
+  fisher.p <- c(fisher.p, out.p)
+}
+
+species.nonzero <- data.frame(species.nonzero, p_Fisher = signif(fisher.p, 2), p_Fisher_FDR = signif(p.adjust(fisher.p, method = "fdr"), 2))
+
+datatable(species.nonzero)
+
+write.csv(species.nonzero, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/Fishers/taxa_species_fishers_test_mats.csv", row.names = F, quote = F)
+
+```
+
+# ANCOM-BC
+
+## Prep
+### Species
+```{r}
+
+# Format " " to "_"
+taxa_count.tmp <- taxa_count
+taxa_count.tmp$Taxon <- gsub(" ", "_", taxa_count$Taxon) # replacing "" with "_" in the taxon name
+# Only take bacteria (ie. no archaea)
+#taxa_count_taxan <- taxa_count.tmp$Taxon[which(taxa_count.tmp$GTDB.taxonomy %in% tree_bacteria$tip.label)]
+taxa_count_taxan <- (taxa_count.tmp[grepl("Bacteria", taxa_count.tmp$GTDB.taxonomy), ])$Taxon
+taxa_count_bac <- as.matrix(taxa_count.tmp[which(taxa_count.tmp$Taxon %in% taxa_count_taxan),which(colnames(taxa_count.tmp) %in% diet_mia_mats$MG_SampleID)])
+rownames(taxa_count_bac) <- taxa_count_taxan
+
+# Format " " to "_"
+taxa_name.tmp <- taxa_name
+taxa_name.tmp$species <- gsub(" ", "_", taxa_name.tmp$species)
+# Only take bacteria (ie. no archaea)
+#taxa_name.tmp <- taxa_name.tmp %>% filter(species %in% tree_bacteria$tip.label)
+taxa_name.tmp <- taxa_name.tmp[grepl("Bacteria", taxa_name.tmp$domain), ]
+taxa_name_bac <- taxa_name.tmp %>% dplyr::select(c("domain", "phylum", "class", "order", "family", "genus", "species"))
+taxa_name_bac <- as.matrix(taxa_name_bac)
+rownames(taxa_name_bac) <- gsub(" ", "_", taxa_count_taxan)
+
+samp_df <- diet_mia_mats
+rownames(samp_df) <- samp_df[,"MG_SampleID"]
+
+otu.mat <- otu_table(taxa_count_bac, taxa_are_rows = TRUE)
+tax.mat <- tax_table(taxa_name_bac)
+samp.mat <- sample_data(samp_df)
+
+physeq_bac <- phyloseq(otu.mat, tax.mat, samp.mat) # 1731
+
+```
+
+### Other taxa
+
+```{r}
+# Other taxa levels
+
+# Family
+family_matrix<-family_count[c(1:131),] %>%
+  column_to_rownames(var="Family") %>%
+  select(diet_mia_mats$MG_SampleID) %>%
+  as.matrix()
+fam.mat <- otu_table(family_matrix, taxa_are_rows = TRUE)
+physeq_fam <- phyloseq(fam.mat, samp.mat)
+
+# Phylum
+phylum_matrix<-phylum_count[c(1:20),] %>%
+  column_to_rownames(var="Phylum") %>%
+  select(diet_mia_mats$MG_SampleID) %>%
+  as.matrix()
+phy.mat <- otu_table(phylum_matrix, taxa_are_rows = TRUE)
+physeq_phy <- phyloseq(phy.mat, samp.mat)
+
+# Genus
+genus_count <- genus_count[!(genus_count$Genus %in% c("UNASSIGNED", "")), ]
+genus_matrix<-genus_count%>%
+  column_to_rownames(var="Genus") %>%
+  select(diet_mia_mats$MG_SampleID) %>%
+  as.matrix()
+gen.mat <- otu_table(genus_matrix, taxa_are_rows = TRUE)
+physeq_gen <- phyloseq(gen.mat, samp.mat)
+
+```
+
+### Other samples
+
+```{r}
+
+# Acute MIA vs true negative control 23 vs 60
+physeq_acuteMIA <- phyloseq(otu_table(taxa_count_bac[,acute_negative_IDs, drop=FALSE], taxa_are_rows = TRUE), 
+                            tax_table(taxa_name_bac), 
+                            sample_data(samp_df %>% filter(MG_SampleID %in% acute_negative_IDs)))
+
+# MIA - true negative control 30 vs 60
+physeq_MIA_true <- phyloseq(otu_table(taxa_count_bac[,MIA_true_IDs, drop=FALSE], taxa_are_rows = TRUE), 
+                            tax_table(taxa_name_bac), 
+                            sample_data(samp_df %>% filter(MG_SampleID %in% MIA_true_IDs)))
+
+# MatS - true negative control 51 vs 60
+physeq_MatS_true <- phyloseq(otu_table(taxa_count_bac[,MatS_true_IDs, drop=FALSE], taxa_are_rows = TRUE), 
+                            tax_table(taxa_name_bac), 
+                            sample_data(samp_df %>% filter(MG_SampleID %in% MatS_true_IDs)))
+
+# 2-5
+physeq_early <- phyloseq(otu_table(taxa_count_bac[,early_IDs, drop=FALSE], taxa_are_rows = TRUE), 
+                            tax_table(taxa_name_bac), 
+                            sample_data(samp_df %>% filter(MG_SampleID %in% early_IDs)))
+
+# 6-10
+physeq_middle <- phyloseq(otu_table(taxa_count_bac[,middle_IDs, drop=FALSE], taxa_are_rows = TRUE), 
+                            tax_table(taxa_name_bac), 
+                            sample_data(samp_df %>% filter(MG_SampleID %in% middle_IDs)))
+
+# 11-17
+physeq_late <- phyloseq(otu_table(taxa_count_bac[,late_IDs, drop=FALSE], taxa_are_rows = TRUE), 
+                            tax_table(taxa_name_bac), 
+                            sample_data(samp_df %>% filter(MG_SampleID %in% late_IDs)))
+```
+
+
+## MIA
+
+### No covariates
+
+```{r}
+
+out = ancombc(phyloseq = physeq_early, formula = "mia_indication", 
+              p_adj_method = "holm", prv_cut = 0.1, lib_cut = 1000,
+              group = "mia_indication", struc_zero = FALSE, neg_lb = FALSE, 
+              max_iter = 100, conserve = TRUE, alpha = 0.05, global = FALSE)
+res = out$res
+
+# Primary result
+
+# Zeros
+out$zero_ind %>% 
+  datatable(caption = "Structural Zeros") # none
+
+# LFC
+tab_lfc = res$lfc
+col_name=c("MIA")
+colnames(tab_lfc) = col_name
+tab_lfc %>% 
+  datatable(caption = "Log Fold Changes from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# SE
+tab_se = res$se
+colnames(tab_se) = col_name
+tab_se %>% 
+  datatable(caption = "SEs from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# Test Statistic
+tab_w = res$W
+colnames(tab_w) = col_name
+tab_w %>% 
+  datatable(caption = "Test Statistics from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# P-values
+tab_p = res$p_val
+colnames(tab_p) = col_name
+tab_p %>% 
+  datatable(caption = "P-values from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# Adjusted p-values
+tab_q = res$q
+colnames(tab_q) = col_name
+tab_q %>% 
+  datatable(caption = "Adjusted p-values from the Primary Result") %>%
+  formatRound(col_name, digits = 3)
+
+# Differentially abundant taxa
+tab_diff = res$diff_abn
+colnames(tab_diff) = col_name
+tab_diff %>% 
+  datatable(caption = "Differentially Abundant Taxa from the Primary Result")
+
+# Diff abundant taxa names 
+sig_taxa_mia = tab_diff %>%
+  dplyr::filter(MIA == "TRUE") %>%
+  rownames()
+sig_taxa_mia
+
+# Save the Excel file
+res <- res %>%
+  as.data.frame() %>%
+  setnames(c("MIA_lfc","MIA_se","MIA_W","MIA_p","MIA_q","MIA_diff")) %>%
+  rownames_to_column(var="taxa")
+write_xlsx(res, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_ancom_bc_mia_early_no_covs.xlsx")
+
+```
+
+#### Plot
+
+```{r}
+res_mia.tmp<-res %>%
+  mutate(MIA_p = -log10(MIA_p)) %>%
+  select(taxa, MIA_p, MIA_lfc) %>%
+  mutate(p_val_t = MIA_p,
+         lfc=MIA_lfc) 
+
+mia_no_covs<-ggplot(res_mia.tmp, aes(x = lfc, y = p_val_t)) +
+  geom_point() +
+  geom_text(data = subset(res_mia.tmp, p_val_t > -log10(0.005)), aes(label = taxa), hjust = -0.1, vjust = -0.1) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", colour = "#7C133B", size=1.5) + # adding a line to show the significance threshold
+  annotate("text", x = min(res_mia.tmp$lfc), y = -log10(0.05), label = "p-value=0.05", hjust = -0.6, vjust = 1.5) + 
+  coord_cartesian(ylim = c(NA, 6), xlim = c(-2.5, 4)) +
+  labs(x = "LFC", y = "-log10(p-value)") +
+  ggtitle("ANCOM-BC: MIA vs true negative without covs")
+mia_no_covs
+#ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/ancom_bc_mia_no_covs_volcano_p.pdf", height = 5, width = 8, dpi=600)
+  
+```
+
+### With covariates: sex, age, dietPCs 1-3
+
+```{r}
+
+out = ancombc(phyloseq = physeq_late, formula = "mia_indication + sex + age + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe", 
+              p_adj_method = "holm", prv_cut = 0.1, lib_cut = 1000,
+              group = "mia_indication", struc_zero = FALSE, neg_lb = FALSE, 
+              max_iter = 100, conserve = TRUE, alpha = 0.05, global = FALSE)
+res = out$res
+
+# Primary result
+
+# Zeros
+out$zero_ind %>% 
+  datatable(caption = "Structural Zeros") # none
+
+# LFC
+tab_lfc = res$lfc
+col_name=c("MIA", "Sex", "Age", "dietPC1", "dietPC2", "dietPC3")
+colnames(tab_lfc) = col_name
+tab_lfc %>% 
+  datatable(caption = "Log Fold Changes from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# SE
+tab_se = res$se
+colnames(tab_se) = col_name
+tab_se %>% 
+  datatable(caption = "SEs from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# Test Statistic
+tab_w = res$W
+colnames(tab_w) = col_name
+tab_w %>% 
+  datatable(caption = "Test Statistics from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# P-values
+tab_p = res$p_val
+colnames(tab_p) = col_name
+tab_p %>% 
+  datatable(caption = "P-values from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# Adjusted p-values
+tab_q = res$q
+colnames(tab_q) = col_name
+tab_q %>% 
+  datatable(caption = "Adjusted p-values from the Primary Result") %>%
+  formatRound(col_name, digits = 3)
+
+# Differentially abundant taxa
+tab_diff = res$diff_abn
+colnames(tab_diff) = col_name
+tab_diff %>% 
+  datatable(caption = "Differentially Abundant Taxa from the Primary Result")
+
+# Diff abundant taxa names 
+sig_taxa_mia = tab_diff %>%
+  dplyr::filter(MIA == "TRUE") %>%
+  rownames()
+sig_taxa_mia
+
+# Save the Excel file
+res <- res %>%
+  as.data.frame() %>%
+  rownames_to_column(var="taxa")
+write_xlsx(res, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_ancom_bc_mia_late_with_covs_sex_age_dietPCs.xlsx")
+
+```
+
+#### Plot
+
+```{r}
+res_mia.tmp<-res %>%
+  mutate(p_val_transformed.mia_indicationMIA = -log10(p_val.mia_indicationMIA)) %>%
+  select(taxa, p_val_transformed.mia_indicationMIA, lfc.mia_indicationMIA) %>%
+  mutate(p_val_t = p_val_transformed.mia_indicationMIA,
+         lfc=lfc.mia_indicationMIA) 
+
+mia_covs<-ggplot(res_mia.tmp, aes(x = lfc, y = p_val_t)) +
+  geom_point() +
+  geom_text(data = subset(res_mia.tmp, p_val_t > -log10(0.05)), aes(label = taxa), hjust = -0.1, vjust = -0.1) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "#7C133B", size =1.5) + # adding a line to show the significance threshold
+  annotate("text", x = min(res_mia.tmp$lfc), y = -log10(0.05), label = "p-value=0.05", hjust = -0.1, vjust = 1.5) +
+  coord_cartesian(ylim = c(NA, 3.5), xlim = c(-2.5, 2.5)) +
+  labs(x = "LFC", y = "-log10(q-value)") +
+  ggtitle("ANCOM-BC: MIA with covs")
+mia_covs
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/ancom_bc_mia_with_covs_volcano_p.pdf", height = 5, width = 8, dpi=600)
+  
+```
+
+## MatS
+
+### No covs
+
+```{r}
+
+out = ancombc(phyloseq = physeq_bac, formula = "mats_indication", 
+              p_adj_method = "holm", prv_cut = 0.1, lib_cut = 1000,
+              group = "mats_indication", struc_zero = FALSE, neg_lb = FALSE, 
+              max_iter = 100, conserve = TRUE, alpha = 0.05, global = TRUE)
+res = out$res
+res_global = out$res_global
+
+# Primary result
+
+# Zeros
+out$zero_ind %>% 
+  datatable(caption = "Structural Zeros") # none
+
+# LFC
+tab_lfc = res$lfc
+col_name=c("MatS")
+#col_name = c("Sex", "Age", "BMI")
+colnames(tab_lfc) = col_name
+tab_lfc %>% 
+  datatable(caption = "Log Fold Changes from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# SE
+tab_se = res$se
+colnames(tab_se) = col_name
+tab_se %>% 
+  datatable(caption = "SEs from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# Test Statistic
+tab_w = res$W
+colnames(tab_w) = col_name
+tab_w %>% 
+  datatable(caption = "Test Statistics from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# P-values
+tab_p = res$p_val
+colnames(tab_p) = col_name
+tab_p %>% 
+  datatable(caption = "P-values from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# Adjusted p-values
+tab_q = res$q
+colnames(tab_q) = col_name
+tab_q %>% 
+  datatable(caption = "Adjusted p-values from the Primary Result") %>%
+  formatRound(col_name, digits = 3)
+
+# Differentially abundant taxa
+tab_diff = res$diff_abn
+colnames(tab_diff) = col_name
+tab_diff %>% 
+  datatable(caption = "Differentially Abundant Taxa from the Primary Result")
+
+# Diff abundant taxa names 
+sig_taxa_mats = tab_diff %>%
+  dplyr::filter(MatS == "TRUE") %>%
+  rownames()
+sig_taxa_mats
+
+# Save the Excel file
+res <- res %>%
+  as.data.frame() %>%
+  setnames(c("MatS_lfc","MatS_se","MatS_W","MatS_p","MatS_q","MatS_diff")) %>%
+  rownames_to_column(var="taxa")
+#write_xlsx(res, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_ancom_bc_mats_no_covs.xlsx")
+
+```
+
+#### Plot
+```{r}
+res_mats.tmp<-res %>%
+  mutate(MatS_p = -log10(MatS_p)) %>%
+  select(taxa, MatS_p, MatS_lfc) %>%
+  mutate(p_val_t = MatS_p,
+         lfc=MatS_lfc) 
+
+mats_no_covs<-ggplot(res_mats.tmp, aes(x = lfc, y = p_val_t)) +
+  geom_point() +
+  geom_text(data = subset(res_mats.tmp, p_val_t > -log10(0.05)), aes(label = taxa), hjust = -0.1, vjust = -0.1) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", colour = "#513286", size=1.5) + # adding a line to show the significance threshold
+  annotate("text", x = min(res_mats.tmp$lfc), y = -log10(0.05), label = "p-value=0.05", hjust = -0.1, vjust = 1.5) + 
+  coord_cartesian(ylim = c(NA, 3.5), xlim = c(-2.5, 2.5)) +
+  labs(x = "LFC", y = "-log10(p-value)") +
+  ggtitle("ANCOM-BC: MatS without covs")
+mats_no_covs
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/ancom_bc_mats_no_covs_volcano_p.pdf", height = 5, width = 8, dpi=600)
+  
+```
+
+### With covariates: age, sex, dietPCs 1-3
+
+```{r}
+
+out = ancombc(phyloseq = physeq_bac, formula = "mats_indication + age + sex + PC1_diet_pe + PC2_diet_pe + PC3_diet_pe", 
+              p_adj_method = "holm", prv_cut = 0.1, lib_cut = 1000,
+              group = "mats_indication", struc_zero = FALSE, neg_lb = FALSE, 
+              max_iter = 100, conserve = TRUE, alpha = 0.05, global = FALSE)
+res = out$res
+
+# Primary result
+
+# Zeros
+out$zero_ind %>% 
+  datatable(caption = "Structural Zeros") # none
+
+# LFC
+tab_lfc = res$lfc
+col_name=c("MatS", "Age", "Sex", "dietPC1", "dietPC2", "diet-C3")
+colnames(tab_lfc) = col_name
+tab_lfc %>% 
+  datatable(caption = "Log Fold Changes from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# SE
+tab_se = res$se
+colnames(tab_se) = col_name
+tab_se %>% 
+  datatable(caption = "SEs from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# Test Statistic
+tab_w = res$W
+colnames(tab_w) = col_name
+tab_w %>% 
+  datatable(caption = "Test Statistics from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# P-values
+tab_p = res$p_val
+colnames(tab_p) = col_name
+tab_p %>% 
+  datatable(caption = "P-values from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# Adjusted p-values
+tab_q = res$q
+colnames(tab_q) = col_name
+tab_q %>% 
+  datatable(caption = "Adjusted p-values from the Primary Result") %>%
+  formatRound(col_name, digits = 3)
+
+# Differentially abundant taxa
+tab_diff = res$diff_abn
+colnames(tab_diff) = col_name
+tab_diff %>% 
+  datatable(caption = "Differentially Abundant Taxa from the Primary Result")
+
+# Diff abundant taxa names 
+sig_taxa_mats = tab_diff %>%
+  dplyr::filter(MatS == "TRUE") %>%
+  rownames()
+sig_taxa_mats
+
+# Save the Excel file
+res <- res %>%
+  as.data.frame() %>%
+  rownames_to_column(var="taxa")
+#write_xlsx(res, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_ancom_bc_mats_with_covs_age_sex_dietPCs.xlsx")
+
+```
+
+#### Plot
+
+```{r}
+res_mats.tmp<-res %>%
+  mutate(p_val_transformed.mats_indicationMatS = -log10(p_val.mats_indicationMatS)) %>%
+  select(taxa, p_val_transformed.mats_indicationMatS, lfc.mats_indicationMatS) %>%
+  mutate(p_val_t = p_val_transformed.mats_indicationMatS,
+         lfc=lfc.mats_indicationMatS) 
+
+mats_covs <- ggplot(res_mats.tmp, aes(x = lfc, y = p_val_t)) +
+  geom_point() +
+  geom_text(data = subset(res_mats.tmp, p_val_t > -log10(0.05)), aes(label = taxa), hjust = -0.1, vjust = -0.1) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "#513286", size =1.5) + # adding a line to show the significance threshold
+  annotate("text", x = min(res_mats.tmp$lfc), y = -log10(0.05), label = "p-value=0.05", hjust = -0.1, vjust = 1.5) +
+  coord_cartesian(ylim = c(NA, 3.5), xlim = c(-2.5, 2.5)) +
+  labs(x = "LFC", y = "-log10(p-value)") +
+  ggtitle("ANCOM-BC: MatS with covs") +
+        geom_vline(xintercept=c(-0.6, 0.6), col="red") +
+        geom_hline(yintercept=-log10(0.05), col="red")
+mats_covs
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/ancom_bc_mats_with_covs_volcano_p.pdf", height = 5, width = 8, dpi=600)
+
+library(gridExtra)
+ancom_combined<-grid.arrange(mia_no_covs, mia_covs, mats_no_covs, mats_covs,ncol=2,nrow=2)
+ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/ancom_bc_volcano_combined_p.pdf", ancom_combined, height = 10, width = 16, dpi=600)
+
+
+```
+
+
+## ME
+
+vvvvvvvvvvvv### No covs
+
+```{r}
+
+out = ancombc(phyloseq = physeq_bac, formula = "me_indication", 
+              p_adj_method = "holm", prv_cut = 0.1, lib_cut = 1000,
+              group = "me_indication", struc_zero = FALSE, neg_lb = FALSE, 
+              max_iter = 100, conserve = TRUE, alpha = 0.05, global = TRUE)
+res = out$res
+res_global = out$res_global
+
+# Primary result
+
+# Zeros
+out$zero_ind %>% 
+  datatable(caption = "Structural Zeros") # none
+
+# LFC
+tab_lfc = res$lfc
+col_name=c("me")
+#col_name = c("Sex", "Age", "BMI")
+colnames(tab_lfc) = col_name
+tab_lfc %>% 
+  datatable(caption = "Log Fold Changes from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# SE
+tab_se = res$se
+colnames(tab_se) = col_name
+tab_se %>% 
+  datatable(caption = "SEs from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# Test Statistic
+tab_w = res$W
+colnames(tab_w) = col_name
+tab_w %>% 
+  datatable(caption = "Test Statistics from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# P-values
+tab_p = res$p_val
+colnames(tab_p) = col_name
+tab_p %>% 
+  datatable(caption = "P-values from the Primary Result") %>%
+  formatRound(col_name, digits = 2)
+
+# Adjusted p-values
+tab_q = res$q
+colnames(tab_q) = col_name
+tab_q %>% 
+  datatable(caption = "Adjusted p-values from the Primary Result") %>%
+  formatRound(col_name, digits = 3)
+
+# Differentially abundant taxa
+tab_diff = res$diff_abn
+colnames(tab_diff) = col_name
+tab_diff %>% 
+  datatable(caption = "Differentially Abundant Taxa from the Primary Result")
+
+# Diff abundant taxa names 
+sig_taxa_me = tab_diff %>%
+  dplyr::filter(me == "TRUE") %>%
+  rownames()
+sig_taxa_me
+
+# Save the Excel file
+res <- res %>%
+  as.data.frame() %>%
+  setnames(c("me_lfc","me_se","me_W","me_p","me_q","me_diff")) %>%
+  rownames_to_column(var="taxa")
+#write_xlsx(res, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_ancom_bc_me_no_covs.xlsx")
+
+```
+
+```{r}
+res_me.tmp<-res %>%
+  mutate(me_q = -log10(me_q)) %>%
+  select(taxa, me_q, me_lfc) %>%
+  mutate(q_val_t = me_q,
+         lfc=me_lfc) 
+
+me_no_covs<-ggplot(res_me.tmp, aes(x = lfc, y = q_val_t)) +
+  geom_point() +
+  geom_text(data = subset(res_me.tmp, q_val_t > 0), aes(label = taxa), hjust = -0.1, vjust = -0.1) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", colour = "#D76A03", size=1.5) + # adding a line to show the significance threshold
+  annotate("text", x = min(res_me.tmp$lfc), y = -log10(0.05), label = "Sig. threshold", hjust = -0.1, vjust = 1.5) + 
+  coord_cartesian(ylim = c(NA, 1.5), xlim = c(-2.5, 2.5)) +
+  labs(x = "LFC", y = "-log10(q-value)") +
+  ggtitle("ANCOM-BC: ME without covs")
+me_no_covs
+#ggsave("C:/Users/uqsvasil/Documents/PhD/MIA/Output/ancom_bc_me_no_covs_volcano.pdf", height = 5, width = 8, dpi=600)
+  
+```
+
+# Check individual species
+
+## Check Faecalicatena.torques
+- F.torques: d__Bacteria; p__Firmicutes_A; c__Clostridia; o__Lachnospirales; f__Lachnospiraceae; g__Faecalicatena
+- Holdemanella sp..: d__Bacteria; p__Firmicutes; c__Bacilli; o__Erysipelotrichales; f__Erysipelotrichaceae; g__Holdemanella
+
+```{r}
+
+tmp <- diet_mia_mats %>%
+  left_join(taxa_count_clr_t[,c("MG_SampleID","Faecalicatena.torques")], by="MG_SampleID")
+
+ggplot(tmp, aes(x=mia_indication, y=Faecalicatena.torques, fill=mia_indication)) + 
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter(position=position_jitter(0.2)) +
+  scale_fill_manual(values=color_mia)
+
+
+```
+## Faecalibacterium.prausnitzii_E
+- in late stage
+```{r}
+
+tmp <- diet_mia_mats %>%
+  filter(age_group == "late") %>%
+  left_join(taxa_count_clr_t[,c("MG_SampleID","Faecalibacterium.prausnitzii_E")], by="MG_SampleID") %>%
+  mutate(interaction = interaction(ASD, mia_indication, sep = " & "),
+         interaction = fct_relevel(interaction, "nonASD & noMIA", "nonASD & MIA", "ASD & noMIA", "ASD & MIA"))
+
+ggplot(tmp, aes(x=mia_indication, y=Faecalibacterium.prausnitzii_E, fill=mia_indication)) + 
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter(position=position_jitter(0.2)) +
+  scale_fill_manual(values=color_mia)
+
+```
+
+### By ASD
+- no interaction
+```{r}
+
+ggplot(tmp, aes(x=interaction, y=Faecalibacterium.prausnitzii_E, fill=mia_indication, shape = ASD)) + 
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(position=position_jitter(0.2), size = 3) +
+  scale_shape_manual(values = c(16, 1)) +  # Define shapes for ASD and nonASD
+  scale_fill_manual(values=color_mia)
+
+```
+
+
+## UBA11452_sp003526375
+- in late stage
+```{r}
+
+tmp <- diet_mia_mats %>%
+  filter(age_group == "late") %>%
+  left_join(taxa_count_clr_t[,c("MG_SampleID","UBA11452.sp003526375")], by="MG_SampleID")
+
+ggplot(tmp, aes(x=mia_indication, y=UBA11452.sp003526375, fill=mia_indication)) + 
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter(position=position_jitter(0.2)) +
+  scale_fill_manual(values=color_mia) 
+
+
+```
+
+# Save progress
+```{r}
+#save.image("mia_analysis_07.05.24.Rdata")
+#load("mia_analysis_07.05.24.Rdata")
+
+```

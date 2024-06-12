@@ -1,0 +1,448 @@
+---
+title: 'TRS-BIOME: Forest plots from OSCA'
+author: "Svetlina Vasileva"
+date: "`r Sys.Date()`"
+output:
+  epuRate::UQ:
+    toc: yes
+    number_sections: yes
+linkedin: Svetlina Vasileva
+twitter: sunsvet23
+mail: svetlinav@gmail.com
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(dev = "pdf", #will save graphs in pdf
+                      dpi = 300,
+                      warning = FALSE,
+                      echo=FALSE,
+                      message = TRUE, 
+                      cache = TRUE,
+                      fig.show='hold') #saves output
+```
+
+# Packages and files
+
+```{r packages and cleaning,message = FALSE}
+library(gridExtra)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(DT)
+library(writexl)
+
+data_dir <- "C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/mia_rsq_stats_main.csv"
+secondary_dir<-"C:/Users/uqsvasil/Documents/PhD/MIA/OSCA/mia_rsq_stats_secondary.csv"
+
+```
+
+# Wrangling
+
+## Main
+
+```{r}
+df <- read.csv(data_dir, header = T, as.is = T)
+df$level<-gsub("_clrcheck","",df$level)# remove "clrcheck from the name
+df <- df  %>% 
+  dplyr::select(type,level,sample,pheno,covs,X..V.O..Vp....Variance..,X..V.O..Vp....SE..,Pval, n) %>%
+  dplyr::rename("trait"="pheno","variance"="X..V.O..Vp....Variance..","se"="X..V.O..Vp....SE..", "p_value"= "Pval") %>%
+  mutate(covs = gsub("sex_age_dietPC", "age_sex_dietPC", covs)) %>% # change "sex_age_dietPC" to "age_sex_dietPC" 
+  mutate(pe=variance*100, 
+         pe_se=se*100,
+         covs_dummy=case_when(covs=="no_covs" ~ "no_covs",
+                              covs!="no_covs" ~  "yes_covs"), #create a dummy covs variable where different types of covs are grouped together
+         covs_dummy = factor(covs_dummy, levels = c("yes_covs", "no_covs")))
+
+# Colour per level if significant
+df$sig_color <- ifelse(df$p_value < 0.05, as.character(df$level), "black") # in order to color depending on both level and significance
+
+# Only clr-transformed variables
+data<-df %>%
+  filter(!grepl('_01', level),  # exclude the variables which are not clr-transformed 
+         level %in% c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common", "Microba_common"), 
+         sample != "no_asd", # for them n=40, it's actually just the unrelated, sib, not powered -> remove
+         sample != "full_bristol") %>%   # the full_sample analyses with dietPCs as covs is already that
+  mutate(level = factor(level, levels = c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common", "Microba_common")))
+
+```
+
+## Secondary - 08052024
+
+```{r}
+
+df <- read.csv(secondary_dir, header = T, as.is = T)
+df$level<-gsub("_clrcheck","",df$level)# remove "clrcheck from the name
+df <- df  %>% 
+  dplyr::select(type,level,sample,pheno,covs,X..V.O..Vp....Variance..,X..V.O..Vp....SE..,Pval, n) %>%
+  dplyr::rename("trait"="pheno","variance"="X..V.O..Vp....Variance..","se"="X..V.O..Vp....SE..", "p_value"= "Pval") %>%
+  mutate(covs = gsub("sex_age_dietPC", "age_sex_dietPC", covs)) %>% # change "sex_age_dietPC" to "age_sex_dietPC" 
+  mutate(pe=variance*100, 
+         pe_se=se*100,
+         covs_dummy=case_when(covs=="no_covs" ~ "no_covs",
+                              covs!="no_covs" ~  "yes_covs"), #create a dummy covs variable where different types of covs are grouped together
+         covs_dummy = factor(covs_dummy, levels = c("yes_covs", "no_covs")))
+
+# Colour per level if significant
+df$sig_color <- ifelse(df$p_value < 0.05, as.character(df$level), "black") # in order to color depending on both level and significance
+
+# Only clr-transformed variables
+data2<-df %>%
+  filter(!grepl('_01', level),  # exclude the variables which are not clr-transformed 
+         level %in% c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common", "Microba_common"), 
+         covs %in% c("no_covs", "age_sex_dietPC")) %>%   # the full_sample analyses with dietPCs as covs is already that
+  mutate(level = factor(level, levels = c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common", "Microba_common")))
+
+```
+
+# Setting up 
+
+## Colour pallete
+
+```{r}
+# Generate only for the ones needed
+color_9 <- c("#F8766D", "#A3A500", "#39B600", "#00BF7D", "#00BFC4", "#00B0F6", "#9590FF", "#E76BF3", "#FF62BC")
+
+```
+
+## Labels
+```{r}
+
+new_labels_levels <-c(
+  "species_common" = "Species_common", 
+  "species_rm0_rare" = "Species_rare", 
+  "genus_common" = "Genus_common",
+  "family_common" = "Family_common", 
+  "EClevel3_common" = "Enzymes(ECL3)_common", 
+  "EClevel4_common" = "Enzymes(ECL4)_common", 
+  "MetaCycpathway_common" = "Pathways(MetaCyc)_common", 
+  "TCDB_common" = "Transporters(TCDB)_common",
+  "Microba_common" = "Genes(Microba)_common"
+  )
+
+new_labels_traits <- c(
+    "mia_indication" = "MIA indication",
+    "mats_indication" = "MatS indication",
+    "mia_number" = "MIA number",
+    "mats_number" = "MatS number",
+    "me_indication" = "ME indication",
+    "me_number" = "ME number",
+    "ASD" = "ASD", 
+    "participant_type" = "Participant type",
+    "sleep_cshq_total" = "Sleep",
+    "devq_wisc_msel" = "devq_wisc_msel", 
+    "age" = "Age",
+    "sex" = "Sex",
+    "bmi" = "BMI",
+    "bristol_regroup" = "Stool type",
+    "dietPC1" = "Dietary PC1",
+    "dietPC2" = "Dietary PC2",
+    "dietPC3" = "Dietary PC3",
+    "meds_antibiotic_current" = "Antibiotics current",
+    "meds_antipsychotic" = "Antipsychotics",
+    "meds_gastrointestinal" = "GI meds",
+    "cam_probiotic" = "Probiotic"
+    )
+
+new_labels_samples <-c(
+  "full_sample" = "Full", # 174
+  "174_sample" = "Full ", # 174
+  "full_bristol" = "With bristol", #(N=165) 
+  "no_sib" = "No SIB", # (N=132)
+  "no_asd" = "UNR", # (N=40)
+  "no_current_ab" = "No AB", # N=164
+  "no_probiotic" = "No PB",  #N=133
+  "no_aap" = "No AAP", # (N=169)
+  "no_gastro_meds" = "No GI meds", # 156
+   "early_age_group" = "Early", # N=64
+  "middle_age_group" = "Intermediate",  # N=68
+  "late_age_group" = "Older",  # N=42
+  "mats_excluded" = "True negative",  # N=90
+  "mia_excluded" = "True negative", #N=81
+  "acute_negative" = "Acute MIA" # N=83
+  )
+
+```
+
+## Plot functions
+
+```{r}
+# Main plots
+
+make_plot_covs<-function(dataset, color_column){
+  ggplot(dataset, aes_string(y = "level", x = "pe", color = color_column, label = "pe", group = "covs_dummy")) +
+    geom_vline(xintercept = 0, color = "dark grey", cex = 1, alpha = 0.8) +
+    facet_wrap(~trait, nrow = 2, labeller = labeller(trait = new_labels_traits)) +
+    scale_y_discrete(limits = rev(levels(dataset$level)), labels = new_labels_levels) +
+    scale_color_manual(values = color_9,
+                       limits = levels(dataset$level),
+                       labels = new_labels_levels) +
+    geom_point(aes(shape = covs_dummy), size = 2, position = position_dodge(.6)) +
+    geom_errorbarh(aes(xmin = pe - pe_se, xmax = pe + pe_se), height = 0.25, position = position_dodge(0.6), width = 0.1, size = 0.5) +
+    scale_shape_manual(values = c(1, 16), 
+                       limits = rev(levels(dataset$covs_dummy)), 
+                       labels = c("No", "Yes"), 
+                       guide = guide_legend(reverse = FALSE)) +
+    scale_x_continuous(limits = c(-10, 119), oob = scales::oob_keep, labels = label_number(accuracy = 1), breaks = c(0, 25, 50, 75, 100)) +
+    xlab(expression(paste("% of phenotypic variance explained (b"^2*")"))) +
+    ylab("Data level") +
+    ggtitle("OREML: Variance Component Analysis without covariates") +
+    labs(shape = "Covariates", color = "Microbiome Measure (if q-value<0.05)") +
+    theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+          legend.text = element_text(size = 30)) +
+    geom_text(aes(label = ifelse(covs_dummy == "no_covs", as.character(round(pe, digits = 0)), '')), hjust = 0.6, vjust = 1.5, size = 3, position = position_dodge(.5)) +
+    theme_light()
+}
+  
+```
+
+
+```{r}
+## Function for secondary analyses - investigating mats and mia indication
+
+make_secondary_plot_covs<-function(dataset, color_column){
+  ggplot(dataset, aes(y = level, x = pe, group=covs_dummy, color=color_column, label=pe)) +
+  geom_vline(xintercept = 0, color = "dark grey", cex = 1, alpha = 0.8) +
+  facet_grid(trait~sample, labeller = labeller(sample=new_labels_samples)) +
+  scale_y_discrete(limits=rev(levels(dataset$level)), labels = new_labels_levels) +
+  scale_color_manual(values=color_9,
+                     limits=(levels(dataset$level)),
+                     labels=new_labels_levels) +
+  geom_point(aes(shape = covs_dummy), size = 2.5, position=position_dodge(.6)) +
+  geom_errorbarh(aes(xmin = pe-(pe_se), xmax = pe+(pe_se)), height = 0.25, position=position_dodge(0.6), width=0.1) +
+  scale_shape_manual(values = c(1, 16), 
+                     limits=rev(levels(subsamples2_adj$covs_dummy)), 
+                     labels=c("No", "Yes"), 
+                     guide = guide_legend(reverse = FALSE)) +
+  scale_x_continuous(limits = c(-10, 100),oob=scales::oob_keep, labels = label_number(accuracy=1), breaks = c(0, 25, 50, 75, 100)) + # keeps the parts of error bars which are within the margins
+  xlab(expression(paste("% of phenotypic variance explained (b"^2*")"))) +
+  ylab("Data level") +
+  ggtitle("OREML: Subsamples") +
+  labs(shape= "Covariates", color = "Microbiome Measure (if q-value<0.05)") +
+  theme(plot.title = element_text(size=20, face="bold", hjust=0.5),
+        legend.text=element_text(size = 12),
+        axis.text.x = element_text(size = 1),
+        strip.text = element_text(size = 8)) +
+  geom_text(aes(label=ifelse(covs_dummy=="yes_covs",as.character(round(pe, digits = 0)),'')), hjust=0.6, vjust=1.5, size=2.5, position=position_dodge(.8)) +
+  theme_light()
+}
+
+```
+
+
+# Primary and Secondary {.tabset}
+
+- 9 microbiome measures, 174 participants
+- take only clr-transformed measures
+
+## No covs
+
+```{r}
+
+# Extract data
+full_sample_no_covs <- data %>% 
+  filter(sample == "174_sample",
+         covs == "no_covs",
+         trait %in% c("mia_indication", "mats_indication", "ASD", "age", "sex", "bmi", "bristol_regroup", "dietPC1", "dietPC2", "dietPC3"))  %>%
+  mutate(trait = factor(trait, levels = c("mia_indication", "mats_indication", "ASD", "age", "sex", "bmi", "bristol_regroup", "dietPC1", "dietPC2", "dietPC3")),
+  level = factor(level, levels = c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common", "Microba_common")))
+
+# Plot
+make_plot_covs(full_sample_no_covs,"sig_color")
+
+ggsave("Output/OSCA/mia_forest_plot_full_sample_no_covs_not_adj_plots.pdf", width = 14, height = 8, dpi=600)
+
+```
+
+## With Covs 
+
+```{r}
+
+# Extract data
+full_sample <- data %>% 
+  filter(sample == "174_sample",
+         covs %in% c("no_covs","age", "sex", "age_sex", "age_sex_dietPC"),
+         trait %in% c("mia_indication", "mats_indication", "ASD", "age", "sex", "bmi", "bristol_regroup", "dietPC1", "dietPC2", "dietPC3")) %>% 
+  mutate(trait = factor(trait, levels = c("mia_indication", "mats_indication", "ASD", "age", "sex", "bmi", "bristol_regroup", "dietPC1", "dietPC2", "dietPC3")),
+         level = factor(level, levels = c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common", "Microba_common")),
+         covs= factor(covs, levels = c("no_covs","age", "sex", "age_sex", "age_sex_dietPC")))
+
+```
+
+```{r}
+
+# This selects the top and bottom covs values 
+bottom_rows <- full_sample %>%                  # extract only the highest and lowest levels of covs
+  group_by(level, sample, trait) %>% 
+  arrange(desc(covs)) %>% 
+  slice_tail(n = 1)
+full_sample<-full_sample %>% 
+  group_by(level, sample, trait) %>%  # and include them in the dataframe
+  arrange(covs) %>% 
+  slice_tail(n = 1) %>%
+  bind_rows(bottom_rows) 
+
+duplicated_rows <- full_sample[duplicated(full_sample), ] # check for duplicates
+print(duplicated_rows) 
+
+```
+
+```{r}
+# Plot
+make_plot_covs(full_sample,"sig_color")
+#ggsave("Output/OSCA/mia_forest_plot_selected_measures_9_covs_not_adj.pdf", width = 10, height = 6, dpi=600)
+
+```
+
+## FDR-adjusted
+- Calcualting FDR for all traits
+- FDR-adjusted p-value represents the probability of obtaining a result as extreme or more extreme than the observed result, while still maintaining the expected FDR level across all tests performed.
+
+```{r}
+
+# Calculation
+
+levels <- unique(full_sample$level) # Get all unique levels
+covs_list <- unique(full_sample$covs_dummy)
+
+# Create an empty list to store the results
+results <- list()
+
+# Loop over each level
+for (lvl in levels) {
+  for (c in covs_list) {
+  # Subset the data for the current level and "no_covs"
+  subset_data <- subset(full_sample, level == lvl & covs_dummy == c)
+  
+  # Calculate FDR adjusted p-values
+  subset_data$FDR <- p.adjust(subset_data$p_value, method = "fdr", n = 10)
+  
+  # Store the subset data in a new data frame with level name as column
+  new_data <- subset_data
+  new_data$level <- lvl
+  new_data$covs_dummy <- c
+  
+  # Store the results in the list with level name as index
+  results[[paste0(lvl, "_", c)]] <- new_data
+  }
+}
+
+# Combine the results into a single data frame
+full_sample_adj <- do.call(rbind, results)
+full_sample_adj<-as.data.frame(full_sample_adj)
+# Order levels
+full_sample_adj <- full_sample_adj %>%
+   mutate(level = factor(level, levels = c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common", "Microba_common")),
+          covs_dummy = factor(covs_dummy, levels=c("yes_covs", "no_covs"))) # have to turn level into a factor, otherwise it doesn't work
+
+# Take colour adjusted
+full_sample_adj$sig_color_adj <- ifelse(full_sample_adj$FDR < (0.05), 
+                                     as.character(full_sample_adj$level), "black") # in order to color depending on both level and significance
+
+write_xlsx(full_sample_adj, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_osca_10_adjusted.xlsx")
+write_xlsx(data, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_osca_all.xlsx")
+
+# Plot
+make_plot_covs(full_sample_adj,"sig_color_adj")
+#ggsave("Output/OSCA/mia_forest_plot_selected_measures_9_covs_adj.pdf", width = 10, height = 6, dpi=600)
+
+```
+
+# Sensitivity analyses
+- mia and mats indication
+- sensitivity analyses when excluding participants based on meds intake/siblings
+
+## Original
+
+```{r}
+# Extract data
+subsamples <- data %>% 
+  filter(covs %in% c("no_covs","age_sex_dietPC"),
+         trait %in% c("mia_indication", "mats_indication")) %>% 
+  mutate(trait = factor(trait, levels = c("mia_indication", "mats_indication")),
+         covs_dummy = factor(covs_dummy, levels=c("yes_covs", "no_covs")),
+         level = factor(level, levels = c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common","Microba_common")),
+         sample = factor(sample, levels = c("174_sample", "full_bristol", "no_sib", "no_current_ab", "no_probiotic", "no_aap", "no_gastro_meds")))
+
+datatable(subsamples)
+
+# Plot
+make_secondary_plot_covs(subsamples, "sig_color")
+
+#ggsave("Output/OSCA/mia_forest_plot_subsamples_non_adj.pdf", width = 10, height = 6, dpi=600)
+
+```
+
+## Expanded
+- true negative control and age groups analyses added
+
+```{r}
+# Extract data
+subsamples2 <- data %>% 
+  filter(covs %in% c("no_covs","age_sex_dietPC"),
+         trait %in% c("mia_indication", "mats_indication")) %>% 
+  bind_rows(data2) %>%
+  mutate(trait = factor(trait, levels = c("mia_indication", "mats_indication")),
+         covs_dummy = factor(covs_dummy, levels=c("yes_covs", "no_covs")),
+         level = factor(level, levels = c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common","Microba_common")),
+         sample = factor(sample, levels = c("174_sample", "full_bristol", "no_sib", "no_current_ab", "no_probiotic", "no_aap", "no_gastro_meds", "early_age_group", "middle_age_group", "late_age_group", "mats_excluded", "mia_excluded","acute_negative")))
+
+datatable(subsamples2)
+
+```
+
+## FDR adjustment
+
+```{r}
+
+levels <- unique(subsamples2$level) # Get all unique levels
+covs_list <- unique(subsamples2$covs_dummy)
+
+# Create an empty list to store the results
+results <- list()
+
+# Loop over each level
+for (lvl in levels) {
+  for (c in covs_list) {
+  # Subset the data for the current level and "no_covs"
+  subset_data <- subset(subsamples2, level == lvl & covs_dummy == c)
+  
+  # Calculate FDR adjusted p-values
+  subset_data$FDR <- p.adjust(subset_data$p_value, method = "fdr", n = 21)
+  
+  # Store the subset data in a new data frame with level name as column
+  new_data <- subset_data
+  new_data$level <- lvl
+  new_data$covs_dummy <- c
+  
+  # Store the results in the list with level name as index
+  results[[paste0(lvl, "_", c)]] <- new_data
+  }
+}
+
+# Combine the results into a single data frame
+subsamples2_adj <- do.call(rbind, results)
+subsamples2_adj<-as.data.frame(subsamples2_adj)
+# Order levels
+subsamples2_adj <- subsamples2_adj %>%
+   mutate(level = factor(level, levels = c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common", "Microba_common")),
+          covs_dummy = factor(covs_dummy, levels=c("yes_covs", "no_covs"))) # have to turn level into a factor, otherwise it doesn't work
+
+# Take colour adjusted
+subsamples2_adj$sig_color_adj <- ifelse(subsamples2_adj$FDR < (0.05), 
+                                     as.character(subsamples2_adj$level), "black") # in order to color depending on both level and significance
+
+write_xlsx(subsamples2_adj, "C:/Users/uqsvasil/Documents/PhD/MIA/Output/mia_osca_sensitivity_adjusted.xlsx")
+
+```
+
+```{r}
+
+# Plot
+make_secondary_plot_covs(subsamples2_adj, "sig_color_adj")
+
+#ggsave("Output/OSCA/mia_forest_plot_subsamples2_adj.pdf", width = 10, height = 6, dpi=600)
+
+```
